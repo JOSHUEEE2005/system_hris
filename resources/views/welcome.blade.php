@@ -33,7 +33,8 @@
                         <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8 8.5 8.5 0 1 0 20.2 15.3Z"/></svg>
                         <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
                     </button>
-                    <a class="nav-action" href="#get-started">Get started <span aria-hidden="true">↗</span></a>
+                    <a class="nav-action" href="{{ route('login') }}">Sign in</a>
+                    <a class="nav-action" href="{{ route('register.email') }}">Register <span aria-hidden="true">↗</span></a>
                 </div>
             </nav>
 
@@ -45,7 +46,7 @@
                     <h1 id="hero-title" tabindex="0">Human Resource<br><em>Information System</em></h1>
                     <p class="hero-intro">A more connected way to support your people. Bring essential HR information and everyday processes together in one clear, dependable place.</p>
                     <div class="hero-actions">
-                        <a class="button button-primary" href="#get-started">Get started <span aria-hidden="true">↗</span></a>
+                        <a class="button button-primary" href="{{ route('register.email') }}">Register <span aria-hidden="true">↗</span></a>
                         <a class="text-link" href="#built-for-people">Explore HRIS <span aria-hidden="true">↓</span></a>
                     </div>
                     <p class="hero-note"><span class="note-check">✓</span> Designed for clarity, built around people</p>
@@ -166,7 +167,7 @@
                 </div>
                 <div class="cta-side">
                     <p>We’re preparing a better way to manage your people and your work. GPCCI HRIS is coming soon.</p>
-                    <a class="button button-light" href="#get-started">Get started <span aria-hidden="true">↗</span></a>
+                    <a class="button button-light" href="{{ route('register.email') }}">Register <span aria-hidden="true">↗</span></a>
                 </div>
             </section>
 
