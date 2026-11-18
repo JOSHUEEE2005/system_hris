@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class OnboardingRequest extends Model
 {
-    protected $fillable = ['user_id', 'contact_number', 'status', 'reviewed_by', 'reviewed_at'];
+    protected $fillable = ['user_id', 'contact_number', 'department_id', 'status', 'reviewed_by', 'reviewed_at'];
 
     protected function casts(): array
     {

@@ -1,5 +1,5 @@
 <x-auth-layout title="Complete registration | GPCCI HRIS" heading="Complete your profile">
-    <p class="auth-intro">Create an account with your email. Email verification is paused for now. HR will review your registration before you can sign in.</p>
+    <p class="auth-intro">Create your account. Applicant registrations require HR review; other account types are created immediately.</p>
     <form class="auth-form" method="POST" action="{{ route('register.store') }}">
         @csrf
         <label class="auth-field">Full name
@@ -10,6 +10,15 @@
         </label>
         <label class="auth-field">Contact number <span class="auth-optional">Optional</span>
             <input class="auth-input" type="tel" name="contact_number" value="{{ old('contact_number') }}" autocomplete="tel" placeholder="e.g. 0917 123 4567" maxlength="20">
+        </label>
+        <label class="auth-field">Register as
+            <select class="auth-input" name="account_type" required>
+                <option value="">Select account type</option>
+                @foreach ($registrationTypes as $slug => $label)
+                    <option value="{{ $slug }}" @selected(old('account_type', 'applicant') === $slug)>{{ $label }}</option>
+                @endforeach
+            </select>
+            <span class="auth-optional">Administrative accounts are created by a Super Admin.</span>
         </label>
         <label class="auth-field">Password <span class="auth-optional">At least 12 characters</span>
             <input class="auth-input" type="password" name="password" autocomplete="new-password" placeholder="Create a password" required minlength="12" maxlength="128">

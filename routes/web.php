@@ -12,6 +12,18 @@ Route::get('/', function () {
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1')->name('login.store');
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->name('logout');
+Route::middleware(['auth', 'active'])->group(function () {
+    Route::get('/applicant', function () {
+        abort_unless(auth()->user()->roles()->where('slug', 'applicant')->exists(), 403);
+
+        return view('applicant.portal');
+    })->name('applicant.portal');
+    Route::get('/stay-tuned', function () {
+        abort_if(auth()->user()->hasPermission('employees.manage') || auth()->user()->roles()->where('slug', 'super-admin')->exists(), 403);
+
+        return view('auth.stay-tuned');
+    })->name('stay-tuned');
+});
 
 Route::prefix('register')->name('register.')->group(function () {
     Route::get('/', [RegistrationController::class, 'showRegistrationForm'])->name('email');
@@ -22,6 +34,15 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     Route::get('/', [AdminController::class, 'dashboard'])
         ->middleware('permission:users.manage|roles.manage|departments.manage|employees.manage|onboarding.review|audit.view')
         ->name('dashboard');
+    Route::get('/users', [AdminController::class, 'usersPage'])
+        ->middleware('permission:users.manage|employees.manage')
+        ->name('users');
+    Route::get('/calendar', [AdminController::class, 'calendarPage'])->name('calendar');
+    Route::get('/contracts', [AdminController::class, 'contractsPage'])->name('contracts');
+    Route::get('/leaves', [AdminController::class, 'leavesPage'])->name('leaves');
+    Route::get('/onboarding', [AdminController::class, 'onboardingPage'])
+        ->middleware('permission:onboarding.review')
+        ->name('onboarding');
 
     Route::middleware('permission:onboarding.review')->group(function () {
         Route::post('/onboarding/{onboarding}/approve', [AdminController::class, 'approveOnboarding'])->name('onboarding.approve');
@@ -42,6 +63,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
 
     Route::middleware('permission:employees.manage')->group(function () {
         Route::post('/employees', [AdminController::class, 'storeEmployee'])->name('employees.store');
+        Route::get('/employees/list', [AdminController::class, 'employeeList'])->name('employees.list');
         Route::put('/employees/{employee}', [AdminController::class, 'updateEmployee'])->name('employees.update');
         Route::delete('/employees/{employee}', [AdminController::class, 'destroyEmployee'])->name('employees.destroy');
     });

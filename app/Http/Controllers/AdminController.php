@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
+use Illuminate\Http\JsonResponse;
 
 class AdminController extends Controller
 {
@@ -41,6 +42,41 @@ class AdminController extends Controller
             'canReviewOnboarding' => $can('onboarding.review'),
             'auditLogs' => $can('audit.view') ? AuditLog::with('actor')->latest()->limit(50)->get() : collect(),
             'canViewAudit' => $can('audit.view'),
+        ]);
+    }
+
+    public function usersPage(): View
+    {
+        return view('admin.users', [
+            'users' => User::with(['roles', 'employee.department', 'department'])->latest()->get(),
+            'roles' => Role::with('permissions')->withCount('users')->orderBy('name')->get(),
+            'employees' => Employee::with('department')->latest()->get(),
+            'departments' => Department::withCount('employees')->orderBy('department_name')->get(),
+            'canManageUsers' => auth()->user()->hasPermission('users.manage'),
+            'canManageEmployees' => auth()->user()->hasPermission('employees.manage'),
+        ]);
+    }
+
+    public function calendarPage(): View
+    {
+        return view('admin.placeholder', ['pageTitle' => 'Calendar', 'pageDescription' => 'Manage HR events and schedules.']);
+    }
+
+    public function contractsPage(): View
+    {
+        return view('admin.placeholder', ['pageTitle' => 'Contracts', 'pageDescription' => 'Manage employee contracts and documents.']);
+    }
+
+    public function leavesPage(): View
+    {
+        return view('admin.placeholder', ['pageTitle' => 'Leaves', 'pageDescription' => 'Review leave requests and balances.']);
+    }
+
+    public function onboardingPage(): View
+    {
+        return view('admin.onboarding', [
+            'pending' => OnboardingRequest::with('user')->where('status', 'Pending')->latest()->get(),
+            'departments' => Department::orderBy('department_name')->get(),
         ]);
     }
 
@@ -84,7 +120,7 @@ class AdminController extends Controller
                     'email' => $user->email,
                     'contact_number' => $onboarding->contact_number,
                     'hire_date' => $data['hire_date'] ?? now()->toDateString(),
-                    'department_id' => $data['department_id'] ?? null,
+                    'department_id' => $data['department_id'] ?? $onboarding->department_id,
                     'position' => $data['position'] ?? null,
                     'salary' => $data['salary'] ?? null,
                     'status' => 'Active',
@@ -245,11 +281,66 @@ class AdminController extends Controller
 
     public function storeEmployee(Request $request): RedirectResponse
     {
-        $data = $request->validate($this->employeeRules());
-        $employee = Employee::create($data);
+        $data = $request->validate($this->organizationEmployeeRules());
+        $employee = DB::transaction(function () use ($data): Employee {
+            [$firstName, $lastName] = $this->splitName($data['employee_name']);
+            $department = Department::firstOrCreate(['department_name' => $data['department']]);
+
+            return Employee::create([
+                'employee_no' => $data['id_number'],
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'position' => $data['designation'],
+                'department_id' => $department->id,
+                'hire_date' => $data['starting_date'],
+                'period' => $data['period'] ?? null,
+                'preparer' => $data['preparer'],
+                'assigned_it' => $data['assigned_it'],
+                'last_date' => $data['last_date'] ?? null,
+                'employment_status' => $data['employment_status'],
+                'employment_type' => $data['employment_type'],
+                'status' => 'Active',
+            ]);
+        });
         $this->audit($request, 'employee.created', 'employee', $employee->id);
 
         return back()->with('status', 'Employee created.');
+    }
+
+    public function employeeList(Request $request): JsonResponse
+    {
+        $search = trim((string) $request->query('search', ''));
+        $employees = Employee::with('department')
+            ->when($search !== '', function ($query) use ($search): void {
+                $query->where(function ($query) use ($search): void {
+                    $query->where('employee_no', 'like', "%{$search}%")
+                        ->orWhere('first_name', 'like', "%{$search}%")
+                        ->orWhere('last_name', 'like', "%{$search}%")
+                        ->orWhere('position', 'like', "%{$search}%")
+                        ->orWhere('period', 'like', "%{$search}%")
+                        ->orWhere('preparer', 'like', "%{$search}%")
+                        ->orWhere('assigned_it', 'like', "%{$search}%")
+                        ->orWhere('employment_type', 'like', "%{$search}%");
+                });
+            })
+            ->orWhereHas('department', fn ($query) => $query->where('department_name', 'like', "%{$search}%"))
+            ->when($search === '', fn ($query) => $query)
+            ->latest()
+            ->get()
+            ->map(fn (Employee $employee): array => [
+                'id' => $employee->id,
+                'name' => trim($employee->first_name.' '.$employee->last_name),
+                'designation' => $employee->position,
+                'department' => $employee->department?->department_name,
+                'starting_date' => $employee->hire_date?->format('Y-m-d'),
+                'period' => $employee->period,
+                'id_number' => $employee->employee_no,
+                'preparer' => $employee->preparer,
+                'assigned_it' => $employee->assigned_it,
+                'employment_type' => $employee->employment_type,
+            ]);
+
+        return response()->json(['data' => $employees]);
     }
 
     public function updateEmployee(Request $request, Employee $employee): RedirectResponse
@@ -337,6 +428,23 @@ class AdminController extends Controller
             'hire_date' => ['nullable', 'date'],
             'salary' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             'status' => ['required', Rule::in(['Active', 'Inactive'])],
+        ];
+    }
+
+    private function organizationEmployeeRules(): array
+    {
+        return [
+            'employee_name' => ['required', 'string', 'max:200'],
+            'designation' => ['required', 'string', 'max:100'],
+            'department' => ['required', 'string', 'max:100'],
+            'starting_date' => ['required', 'date'],
+            'period' => ['nullable', 'string', 'max:100', 'required_if:employment_type,Internship'],
+            'id_number' => ['required', 'string', 'max:20', 'unique:employees,employee_no'],
+            'preparer' => ['required', 'string', 'max:150'],
+            'assigned_it' => ['required', 'string', 'max:150'],
+            'last_date' => ['nullable', 'date', 'after_or_equal:starting_date'],
+            'employment_status' => ['required', Rule::in(['Employee', 'Intern'])],
+            'employment_type' => ['required', Rule::in(['Employment', 'Internship'])],
         ];
     }
 

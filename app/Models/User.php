@@ -26,6 +26,7 @@ class User extends Authenticatable
         'email_verified_at',
         'password_hash',
         'employee_id',
+        'department_id',
         'status',
     ];
 
@@ -59,6 +60,11 @@ class User extends Authenticatable
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class);
+    }
+
+    public function department(): BelongsTo
+    {
+        return $this->belongsTo(Department::class);
     }
 
     public function roles(): BelongsToMany

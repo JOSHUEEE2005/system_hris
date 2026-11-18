@@ -44,6 +44,10 @@ class RoleAndPermissionSeeder extends Seeder
             ['slug' => 'employee'],
             ['name' => 'Employee', 'description' => 'Employee self-service access'],
         );
+        $applicant = Role::updateOrCreate(
+            ['slug' => 'applicant'],
+            ['name' => 'Applicant', 'description' => 'Applicant portal access'],
+        );
 
         $superAdmin->permissions()->sync(Permission::all()->modelKeys());
         $hrManager->permissions()->sync(
@@ -66,5 +70,6 @@ class RoleAndPermissionSeeder extends Seeder
                 'leave_requests.self_manage',
             ])->pluck('id'),
         );
+        $applicant->permissions()->sync([]);
     }
 }
