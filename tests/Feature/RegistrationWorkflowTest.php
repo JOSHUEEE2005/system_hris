@@ -122,6 +122,59 @@ class RegistrationWorkflowTest extends TestCase
         $this->actingAs($hr)->post(route('admin.users.store'), [])->assertForbidden();
     }
 
+    public function test_dashboard_uses_permission_scoped_counts_for_summary(): void
+    {
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'dashboard-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+
+        User::create([
+            'name' => 'Active User',
+            'email' => 'active-dashboard@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'status' => 'Active',
+        ]);
+        $pendingUser = User::create([
+            'name' => 'Pending User',
+            'email' => 'pending-dashboard@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'status' => 'Pending',
+        ]);
+        OnboardingRequest::create(['user_id' => $pendingUser->id, 'status' => 'Pending']);
+
+        Employee::create([
+            'employee_no' => 'DASH-001',
+            'first_name' => 'Active',
+            'last_name' => 'Intern',
+            'status' => 'Active',
+            'employment_type' => 'Internship',
+        ]);
+        Employee::create([
+            'employee_no' => 'DASH-002',
+            'first_name' => 'Inactive',
+            'last_name' => 'Employee',
+            'status' => 'Inactive',
+            'employment_type' => 'Employment',
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('admin.dashboard'))
+            ->assertOk()
+            ->assertViewHas('pendingCount', 1)
+            ->assertViewHas('userCount', 3)
+            ->assertViewHas('activeUserCount', 2)
+            ->assertViewHas('employeeCount', 2)
+            ->assertViewHas('activeEmployeeCount', 1)
+            ->assertViewHas('inactiveEmployeeCount', 1)
+            ->assertViewHas('internCount', 1)
+            ->assertViewHas('departmentCount', Department::count());
+    }
+
     public function test_super_admin_can_create_a_linked_user_and_employee_profile(): void
     {
         $department = Department::where('department_name', 'Interns')->firstOrFail();

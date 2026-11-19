@@ -5,8 +5,10 @@ namespace Tests\Feature;
 use App\Models\AuditLog;
 use App\Models\Contract;
 use App\Models\Department;
+use App\Models\Employee;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\ContractDocumentService;
 use Database\Seeders\RoleAndPermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -114,6 +116,131 @@ class ContractsWorkflowTest extends TestCase
             'contract_id' => $contract->id,
             'user_id' => $outsideRecipient->id,
         ]);
+    }
+
+    public function test_employees_from_each_department_only_see_home_and_their_assigned_contracts(): void
+    {
+        $departmentNames = [
+            'Chamber Services',
+            'Dual Training',
+            'Government Affairs',
+            'Trade Promotions',
+            'Communications',
+            'Internal Org',
+            'Interns',
+        ];
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $departmentUsers = [];
+
+        foreach ($departmentNames as $index => $departmentName) {
+            $department = Department::where('department_name', $departmentName)->firstOrFail();
+            $user = $this->createUser(
+                'Employee '.$index,
+                'employee'.$index.'@example.com',
+                'employee',
+                $department->id,
+            );
+            $departmentUsers[] = $user;
+
+            $this->actingAs($user)->get(route('stay-tuned'))
+                ->assertOk()
+                ->assertSee('Coming soon')
+                ->assertSee('HOME')
+                ->assertSee('Contracts')
+                ->assertDontSee(route('admin.users'))
+                ->assertDontSee(route('admin.calendar'))
+                ->assertDontSee(route('admin.leaves'))
+                ->assertDontSee(route('admin.onboarding'))
+                ->assertDontSee(route('admin.history'));
+        }
+
+        foreach ([0, 1] as $index) {
+            $this->actingAs($hr)->post(route('admin.contracts.store'), [
+                'title' => 'Private agreement '.$index,
+                'file' => UploadedFile::fake()->create('agreement-'.$index.'.pdf', 1, 'application/pdf'),
+                'recipient_type' => 'individual',
+                'recipient_ids' => [$departmentUsers[$index]->id],
+            ])->assertRedirect();
+        }
+
+        $this->actingAs($departmentUsers[0])->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Private agreement 0')
+            ->assertDontSee('Private agreement 1');
+        $this->actingAs($departmentUsers[1])->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Private agreement 1')
+            ->assertDontSee('Private agreement 0');
+    }
+
+    public function test_hr_can_create_and_send_a_sanitized_personalized_template_as_pdf_or_word(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+        $employee = Employee::create([
+            'employee_no' => 'EMP-105',
+            'first_name' => 'Jamie',
+            'last_name' => 'Rivera',
+            'email' => 'jamie@example.com',
+            'department_id' => $department->id,
+            'position' => 'HR Analyst',
+        ]);
+        $recipient->update(['employee_id' => $employee->id]);
+
+        $this->actingAs($hr)->post(route('admin.contracts.store'), [
+            'contract_source' => 'editor',
+            'title' => 'Employment agreement',
+            'content_html' => '<h1>Hi [User Full Name]</h1><p>[Work Email] · [Department] · [Employee ID] · [Designation] · [Role] · [Status]</p><script>window.alert(1)</script>',
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id],
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'Contract uploaded and sent to 1 recipient.');
+
+        $contract = Contract::with('recipients')->firstOrFail();
+        $this->assertNotNull($contract->content_html);
+        $this->assertStringNotContainsString('<script', $contract->content_html);
+        Storage::disk('local')->assertExists($contract->storage_path);
+        $personalized = app(ContractDocumentService::class)->personalizeHtml($contract->content_html, $recipient);
+        $this->assertStringContainsString('Hi Jamie Rivera', $personalized);
+        $this->assertStringContainsString('jamie@example.com', $personalized);
+        $this->assertStringContainsString('Chamber Services', $personalized);
+        $this->assertStringContainsString('EMP-105', $personalized);
+        $this->assertStringContainsString('HR Analyst', $personalized);
+        $this->assertStringContainsString((string) Role::where('slug', 'employee')->value('name'), $personalized);
+        $this->assertStringContainsString('Active', $personalized);
+
+        $this->actingAs($recipient)
+            ->get(route('admin.contracts.download', [$contract, 'format' => 'pdf']))
+            ->assertHeader('content-type', 'application/pdf')
+            ->assertDownload('employment-agreement.pdf');
+        $this->actingAs($recipient)
+            ->get(route('admin.contracts.download', [$contract, 'format' => 'docx']))
+            ->assertDownload('employment-agreement.docx');
+        $this->actingAs($recipient)
+            ->get(route('admin.contracts.preview', $contract))
+            ->assertHeader('content-type', 'application/pdf');
+        $this->actingAs($recipient)
+            ->post(route('admin.contracts.received', $contract))
+            ->assertRedirect();
+        $oldStoragePath = $contract->storage_path;
+        $this->actingAs($hr)->put(route('admin.contracts.update', $contract), [
+            'contract_source' => 'editor',
+            'title' => 'Employment agreement',
+            'content_html' => '<p>Updated terms for [User Full Name]</p>',
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id],
+        ])->assertRedirect();
+        $contract->refresh()->load('recipients');
+        Storage::disk('local')->assertMissing($oldStoragePath);
+        $this->assertSame('Pending', $contract->recipients->firstOrFail()->status);
+        $this->assertStringContainsString('Updated terms', $contract->content_html);
+        $this->actingAs($hr)
+            ->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Create contract')
+            ->assertSee('User Full Name')
+            ->assertSee('Employment agreement');
     }
 
     public function test_hr_can_edit_and_delete_contracts_and_review_the_changes_in_system_history(): void

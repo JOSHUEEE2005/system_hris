@@ -7,12 +7,15 @@ use App\Models\Contract;
 use App\Models\ContractRecipient;
 use App\Models\Department;
 use App\Models\User;
+use App\Services\ContractDocumentService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -30,7 +33,7 @@ class ContractController extends Controller
         'image/webp',
     ];
 
-    public function index(Request $request): View
+    public function index(Request $request, ContractDocumentService $documents): View
     {
         $viewer = $request->user();
         $canManageContracts = $viewer->hasPermission('contracts.manage');
@@ -55,14 +58,20 @@ class ContractController extends Controller
                 ? $this->recipientCandidateQuery()->with(['department', 'employee.department'])->orderBy('name')->get()
                 : collect(),
             'canManageContracts' => $canManageContracts,
+            'oldContractContentHtml' => $request->session()->hasOldInput('content_html')
+                ? $documents->sanitizeHtml((string) $request->old('content_html'))
+                : '',
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request, ContractDocumentService $documents): RedirectResponse
     {
+        $sourceType = $request->input('contract_source', 'upload');
         $data = $request->validate([
+            'contract_source' => ['sometimes', Rule::in(['upload', 'editor'])],
             'title' => ['required', 'string', 'max:200'],
-            'file' => ['required', 'file', 'max:35840'],
+            'file' => [$sourceType === 'upload' ? 'required' : 'nullable', 'file', 'max:35840'],
+            'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
@@ -74,24 +83,47 @@ class ContractController extends Controller
         ]);
         $recipientIds = $this->resolveRecipientIds($data);
 
-        $file = $data['file'];
-        $storagePath = $file->store('contracts', 'local');
+        $contentHtml = $sourceType === 'editor' ? $documents->sanitizeHtml($data['content_html']) : null;
+        if ($sourceType === 'editor' && trim(strip_tags($contentHtml)) === '') {
+            throw ValidationException::withMessages([
+                'content_html' => 'Add contract text before sending.',
+            ]);
+        }
+        $file = $data['file'] ?? null;
+        $storagePath = $sourceType === 'editor'
+            ? $this->storeEditorDocument($contentHtml)
+            : $file->store('contracts', 'local');
         if ($storagePath === false) {
             return back()->withErrors(['file' => 'The contract file could not be stored.'])->withInput();
         }
+        $mimeType = $sourceType === 'editor' ? 'text/html' : ($file->getMimeType() ?: 'application/octet-stream');
+        $originalFilename = $sourceType === 'editor'
+            ? $this->templateFilename($data['title'])
+            : $file->getClientOriginalName();
+        $fileSize = $sourceType === 'editor' ? strlen($contentHtml) : $file->getSize();
 
         try {
-            DB::transaction(function () use ($data, $file, $storagePath, $recipientIds, $request): void {
+            DB::transaction(function () use (
+                $data,
+                $contentHtml,
+                $fileSize,
+                $mimeType,
+                $originalFilename,
+                $storagePath,
+                $recipientIds,
+                $request,
+            ): void {
                 $contract = Contract::create([
                     'title' => $data['title'],
-                    'original_filename' => $file->getClientOriginalName(),
+                    'original_filename' => $originalFilename,
                     'storage_path' => $storagePath,
-                    'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
-                    'file_size' => $file->getSize(),
+                    'mime_type' => $mimeType,
+                    'file_size' => $fileSize,
                     'recipient_type' => $data['recipient_type'],
                     'department_id' => $data['recipient_type'] === 'department' ? $data['department_id'] : null,
                     'created_by' => $request->user()->id,
                     'sent_at' => now(),
+                    'content_html' => $contentHtml,
                 ]);
                 $contract->recipients()->createMany(array_map(
                     fn (int $userId): array => ['user_id' => $userId, 'status' => 'Pending'],
@@ -119,11 +151,15 @@ class ContractController extends Controller
         return back()->with('status', 'Contract uploaded and sent to '.$this->recipientCountLabel(count($recipientIds)).'.');
     }
 
-    public function update(Request $request, Contract $contract): RedirectResponse
+    public function update(Request $request, Contract $contract, ContractDocumentService $documents): RedirectResponse
     {
+        $sourceType = $request->input('contract_source', $contract->content_html !== null ? 'editor' : 'upload');
+        $requiresUpload = $sourceType === 'upload' && $contract->content_html !== null;
         $data = $request->validate([
+            'contract_source' => ['sometimes', Rule::in(['upload', 'editor'])],
             'title' => ['required', 'string', 'max:200'],
-            'file' => ['nullable', 'file', 'max:35840'],
+            'file' => [$requiresUpload ? 'required' : 'nullable', 'file', 'max:35840'],
+            'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
@@ -142,15 +178,51 @@ class ContractController extends Controller
                 ->all();
             $recipientIds = array_values(array_unique(array_merge($recipientIds, $unavailableExistingIds)));
         }
+
+        $contentHtml = $sourceType === 'editor' ? $documents->sanitizeHtml($data['content_html']) : null;
+        if ($sourceType === 'editor' && trim(strip_tags($contentHtml)) === '') {
+            throw ValidationException::withMessages([
+                'content_html' => 'Add contract text before saving.',
+            ]);
+        }
+
         $file = $data['file'] ?? null;
-        $newStoragePath = $file?->store('contracts', 'local');
+        $documentChanged = (bool) $file || $contentHtml !== $contract->content_html;
+        $newStoragePath = null;
+        if ($sourceType === 'editor' && $contentHtml !== $contract->content_html) {
+            $newStoragePath = $this->storeEditorDocument($contentHtml);
+        } elseif ($file) {
+            $newStoragePath = $file->store('contracts', 'local');
+        }
         if ($file && $newStoragePath === false) {
             return back()->withErrors(['file' => 'The replacement file could not be stored.'])->withInput();
         }
 
+        $mimeType = $sourceType === 'editor'
+            ? 'text/html'
+            : ($file ? ($file->getMimeType() ?: 'application/octet-stream') : $contract->mime_type);
+        $originalFilename = $sourceType === 'editor'
+            ? $this->templateFilename($data['title'])
+            : ($file?->getClientOriginalName() ?? $contract->original_filename);
+        $fileSize = $sourceType === 'editor'
+            ? strlen($contentHtml)
+            : ($file?->getSize() ?? $contract->file_size);
+
         $oldStoragePath = null;
         try {
-            DB::transaction(function () use ($data, $file, $newStoragePath, $recipientIds, $request, $contract, &$oldStoragePath): void {
+            DB::transaction(function () use (
+                $data,
+                $contentHtml,
+                $documentChanged,
+                $fileSize,
+                $mimeType,
+                $originalFilename,
+                $newStoragePath,
+                $recipientIds,
+                $request,
+                $contract,
+                &$oldStoragePath,
+            ): void {
                 $lockedContract = Contract::with('recipients')
                     ->whereKey($contract->id)
                     ->lockForUpdate()
@@ -166,24 +238,26 @@ class ContractController extends Controller
 
                 $lockedContract->update([
                     'title' => $data['title'],
-                    'original_filename' => $file?->getClientOriginalName() ?? $lockedContract->original_filename,
+                    'original_filename' => $originalFilename,
                     'storage_path' => $newStoragePath ?? $lockedContract->storage_path,
-                    'mime_type' => $file ? ($file->getMimeType() ?: 'application/octet-stream') : $lockedContract->mime_type,
-                    'file_size' => $file?->getSize() ?? $lockedContract->file_size,
+                    'mime_type' => $mimeType,
+                    'file_size' => $fileSize,
                     'recipient_type' => $data['recipient_type'],
                     'department_id' => $departmentId,
+                    'content_html' => $contentHtml,
                 ]);
 
                 $lockedContract->recipients()->whereNotIn('user_id', $recipientIds)->delete();
                 foreach ($recipientIds as $userId) {
                     $existingRecipient = $oldRecipientsById->get($userId);
                     if ($existingRecipient) {
-                        if ($file) {
+                        if ($documentChanged) {
                             $existingRecipient->update([
                                 'status' => 'Pending',
                                 'received_at' => null,
                             ]);
                         }
+
                         continue;
                     }
 
@@ -196,8 +270,8 @@ class ContractController extends Controller
                 $this->audit($request, 'contract.updated', $lockedContract->id, [
                     'title' => ['from' => $oldTitle, 'to' => $data['title']],
                     'file' => [
-                        'replaced' => (bool) $file,
-                        'previous_filename' => $file ? $oldFilename : null,
+                        'replaced' => $documentChanged,
+                        'previous_filename' => $documentChanged ? $oldFilename : null,
                         'filename' => $lockedContract->original_filename,
                     ],
                     'recipient_type' => [
@@ -213,7 +287,7 @@ class ContractController extends Controller
                         'removed' => array_values(array_diff($oldRecipientIds, $recipientIds)),
                         'current' => $recipientIds,
                     ],
-                    'acknowledgements_reset' => (bool) $file,
+                    'acknowledgements_reset' => $documentChanged,
                 ]);
             });
         } catch (Throwable $exception) {
@@ -226,7 +300,7 @@ class ContractController extends Controller
             throw $exception;
         }
 
-        if ($file && $oldStoragePath && ! Storage::disk('local')->delete($oldStoragePath)) {
+        if ($documentChanged && $oldStoragePath && ! Storage::disk('local')->delete($oldStoragePath)) {
             Log::warning('Unable to remove the previous contract file after replacement.', [
                 'storage_path' => $oldStoragePath,
                 'contract_id' => $contract->id,
@@ -270,9 +344,21 @@ class ContractController extends Controller
         return back()->with('status', 'Contract deleted successfully.');
     }
 
-    public function preview(Request $request, Contract $contract): BinaryFileResponse
+    public function preview(Request $request, Contract $contract, ContractDocumentService $documents): BinaryFileResponse|Response
     {
         $this->authorizeAccess($request, $contract);
+        if ($contract->content_html !== null) {
+            $recipient = $contract->recipients()->where('user_id', $request->user()->id)->exists()
+                ? $request->user()
+                : null;
+            $html = $documents->personalizeHtml($contract->content_html, $recipient);
+
+            return response($documents->renderPdf($html), 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'inline; filename="'.$this->templateFilename($contract->title, 'pdf').'"',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+        }
         abort_unless(in_array($contract->mime_type, self::PREVIEWABLE_MIME_TYPES, true), 415);
 
         $path = Storage::disk('local')->path($contract->storage_path);
@@ -284,9 +370,34 @@ class ContractController extends Controller
         ]);
     }
 
-    public function download(Request $request, Contract $contract): StreamedResponse
+    public function download(Request $request, Contract $contract, ContractDocumentService $documents): StreamedResponse
     {
         $this->authorizeAccess($request, $contract);
+        if ($contract->content_html !== null) {
+            $format = strtolower((string) $request->query('format', 'pdf'));
+            abort_unless(in_array($format, ['pdf', 'docx'], true), 422, 'Choose PDF or Word format.');
+
+            $recipient = $contract->recipients()->where('user_id', $request->user()->id)->exists()
+                ? $request->user()
+                : null;
+            $html = $documents->personalizeHtml($contract->content_html, $recipient);
+            $contents = $format === 'pdf'
+                ? $documents->renderPdf($html)
+                : $documents->renderDocx($html);
+
+            return response()->streamDownload(
+                static function () use ($contents): void {
+                    echo $contents;
+                },
+                $this->templateFilename($contract->title, $format),
+                [
+                    'Content-Type' => $format === 'pdf'
+                        ? 'application/pdf'
+                        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'X-Content-Type-Options' => 'nosniff',
+                ],
+            );
+        }
 
         return Storage::disk('local')->download($contract->storage_path, $contract->original_filename, [
             'X-Content-Type-Options' => 'nosniff',
@@ -379,5 +490,20 @@ class ContractController extends Controller
     private function recipientCountLabel(int $count): string
     {
         return $count.' '.($count === 1 ? 'recipient' : 'recipients');
+    }
+
+    private function storeEditorDocument(string $contentHtml): string
+    {
+        $path = 'contracts/templates/'.Str::uuid().'.html';
+        if (! Storage::disk('local')->put($path, $contentHtml)) {
+            throw new \RuntimeException('The contract template could not be stored.');
+        }
+
+        return $path;
+    }
+
+    private function templateFilename(string $title, string $extension = 'html'): string
+    {
+        return (Str::slug($title) ?: 'contract').'.'.$extension;
     }
 }

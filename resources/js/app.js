@@ -1,5 +1,40 @@
 import './bootstrap';
 
+const adminSidebar = document.querySelector('.sa-side');
+
+if (adminSidebar instanceof HTMLElement) {
+    const expandedKey = 'sa-nav-expanded';
+    const isMobileNavigation = () => window.matchMedia('(max-width: 800px)').matches;
+    let navigating = false;
+
+    adminSidebar.addEventListener('pointerleave', () => {
+        if (navigating) return;
+
+        sessionStorage.removeItem(expandedKey);
+        document.documentElement.classList.remove('sa-nav-expanded');
+    });
+
+    adminSidebar.querySelectorAll('a[href]').forEach((link) => {
+        link.addEventListener('click', (event) => {
+            if (
+                isMobileNavigation()
+                || link.target === '_blank'
+                || link.hasAttribute('download')
+                || event.button !== 0
+                || event.metaKey
+                || event.ctrlKey
+                || event.shiftKey
+                || event.altKey
+            ) {
+                return;
+            }
+
+            navigating = true;
+            sessionStorage.setItem(expandedKey, '1');
+        });
+    });
+}
+
 const themeToggle = document.querySelector('.theme-toggle');
 
 if (themeToggle instanceof HTMLButtonElement) {
@@ -34,6 +69,14 @@ const contractFileLabel = document.getElementById('contract-file-label');
 const contractFileHelp = document.getElementById('contract-file-help');
 const contractCurrentFile = document.getElementById('contract-current-file');
 const contractCurrentFilename = document.getElementById('contract-current-filename');
+const contractSourceInput = document.getElementById('contract-source');
+const contractDocumentModeInputs = [...document.querySelectorAll('input[name="contract_document_mode"]')];
+const contractUploadPanel = document.getElementById('contract-upload-panel');
+const contractEditorPanel = document.getElementById('contract-editor-panel');
+const contractEditor = document.getElementById('contract-editor');
+const contractContentHtml = document.getElementById('contract-content-html');
+const contractEditorBlock = document.getElementById('contract-editor-block');
+const contractPlaceholder = document.getElementById('contract-placeholder');
 const contractSubmitButton = document.getElementById('contract-submit-button');
 const contractMethodInput = document.getElementById('contract-method');
 const contractRecordId = document.getElementById('contract-record-id');
@@ -48,6 +91,61 @@ const contractRecipientCheckboxes = [...document.querySelectorAll('input[name="r
 const contractRecipientSearch = document.getElementById('contract-recipient-search');
 const contractRecipientOptions = [...document.querySelectorAll('[data-contract-recipient-option]')];
 const noContractRecipientsMatch = document.getElementById('contract-recipient-search-empty');
+let contractEditorRange = null;
+
+const rememberContractEditorRange = () => {
+    const selection = window.getSelection();
+    if (
+        selection?.rangeCount
+        && contractEditor instanceof HTMLElement
+        && contractEditor.contains(selection.anchorNode)
+    ) {
+        contractEditorRange = selection.getRangeAt(0).cloneRange();
+    }
+};
+
+const restoreContractEditorRange = () => {
+    if (!(contractEditor instanceof HTMLElement)) return;
+    contractEditor.focus();
+    if (!contractEditorRange) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(contractEditorRange);
+};
+
+const updateContractDocumentMode = () => {
+    const mode = contractDocumentModeInputs.find((input) => input.checked)?.value || 'upload';
+    const currentSource = contractForm?.dataset.currentSource || 'new';
+    if (contractSourceInput instanceof HTMLInputElement) contractSourceInput.value = mode;
+    if (contractUploadPanel instanceof HTMLElement) contractUploadPanel.hidden = mode !== 'upload';
+    if (contractEditorPanel instanceof HTMLElement) contractEditorPanel.hidden = mode !== 'editor';
+    if (contractFileInput instanceof HTMLInputElement) {
+        contractFileInput.disabled = mode !== 'upload';
+        contractFileInput.required = mode === 'upload' && currentSource !== 'upload';
+    }
+    if (contractContentHtml instanceof HTMLTextAreaElement) {
+        contractContentHtml.disabled = mode !== 'editor';
+    }
+    if (contractFileLabel) {
+        contractFileLabel.innerHTML = mode === 'upload' && currentSource !== 'upload'
+            ? `Contract file <span>*</span>`
+            : currentSource === 'upload' ? 'Replace file (optional)' : 'Contract file';
+    }
+    if (contractSubmitButton instanceof HTMLButtonElement && currentSource === 'new') {
+        contractSubmitButton.textContent = mode === 'editor' ? 'Create and send' : 'Upload and send';
+        if (contractModalDescription) {
+            contractModalDescription.textContent = mode === 'editor'
+                ? 'Write a contract, add recipient fields, and choose who should receive it.'
+                : 'Upload a file and choose who should receive it.';
+        }
+    }
+};
+
+const syncContractEditor = () => {
+    if (contractEditor instanceof HTMLElement && contractContentHtml instanceof HTMLTextAreaElement) {
+        contractContentHtml.value = contractEditor.innerHTML;
+    }
+};
 
 const updateContractRecipientMode = () => {
     if (!(contractDepartmentChoice instanceof HTMLElement) || !(contractIndividualChoice instanceof HTMLElement)) {
@@ -101,6 +199,9 @@ const setContractCreateMode = () => {
 
     contractForm.action = contractForm.dataset.storeUrl;
     contractForm.reset();
+    contractForm.dataset.currentSource = 'new';
+    contractEditorRange = null;
+    contractDocumentModeInputs.forEach((input) => { input.checked = input.value === 'upload'; });
     if (contractTitleInput instanceof HTMLInputElement) contractTitleInput.value = '';
     if (contractFileInput instanceof HTMLInputElement) {
         contractFileInput.value = '';
@@ -111,6 +212,8 @@ const setContractCreateMode = () => {
         contractFileHelp.textContent = 'Any file type is accepted, up to 35 MB. PDF and common image files preview here; other types can be downloaded.';
     }
     if (contractCurrentFile instanceof HTMLElement) contractCurrentFile.hidden = true;
+    if (contractEditor instanceof HTMLElement) contractEditor.innerHTML = '';
+    if (contractContentHtml instanceof HTMLTextAreaElement) contractContentHtml.value = '';
     if (contractMethodInput instanceof HTMLInputElement) contractMethodInput.disabled = true;
     if (contractRecordId instanceof HTMLInputElement) contractRecordId.value = '';
     if (contractDepartmentSelect instanceof HTMLSelectElement) {
@@ -124,6 +227,7 @@ const setContractCreateMode = () => {
     if (contractSubmitButton instanceof HTMLButtonElement) contractSubmitButton.textContent = 'Upload and send';
     if (contractDeleteButton instanceof HTMLButtonElement) contractDeleteButton.hidden = true;
     if (contractDeleteForm instanceof HTMLFormElement) contractDeleteForm.action = contractForm.dataset.storeUrl;
+    updateContractDocumentMode();
     updateContractRecipientMode();
     filterContractRecipients();
     showContractModal();
@@ -133,12 +237,14 @@ const setContractEditMode = (button, preserveValues = false) => {
     if (!(contractForm instanceof HTMLFormElement)) return;
 
     contractForm.action = button.dataset.updateUrl;
+    contractForm.dataset.currentSource = button.dataset.sourceType || 'upload';
     if (contractMethodInput instanceof HTMLInputElement) contractMethodInput.disabled = false;
     if (contractRecordId instanceof HTMLInputElement) contractRecordId.value = button.dataset.contractId;
     if (contractDeleteForm instanceof HTMLFormElement) contractDeleteForm.action = button.dataset.deleteUrl;
     if (contractDeleteButton instanceof HTMLButtonElement) contractDeleteButton.hidden = false;
 
     if (!preserveValues) {
+        contractEditorRange = null;
         if (contractTitleInput instanceof HTMLInputElement) contractTitleInput.value = button.dataset.title;
         if (contractDepartmentSelect instanceof HTMLSelectElement) {
             contractDepartmentSelect.value = button.dataset.departmentId;
@@ -146,11 +252,14 @@ const setContractEditMode = (button, preserveValues = false) => {
         contractModeInputs.forEach((input) => { input.checked = input.value === button.dataset.recipientType; });
         const selectedIds = new Set(button.dataset.recipientIds.split(',').filter(Boolean));
         contractRecipientCheckboxes.forEach((input) => { input.checked = selectedIds.has(input.value); });
+        const source = button.dataset.sourceType || 'upload';
+        contractDocumentModeInputs.forEach((input) => { input.checked = input.value === source; });
+        if (contractEditor instanceof HTMLElement) contractEditor.innerHTML = button.dataset.contentHtml || '';
+        if (contractContentHtml instanceof HTMLTextAreaElement) contractContentHtml.value = button.dataset.contentHtml || '';
     }
 
     if (contractFileInput instanceof HTMLInputElement) {
         contractFileInput.value = '';
-        contractFileInput.required = false;
     }
     if (contractFileLabel) contractFileLabel.textContent = 'Replace file (optional)';
     if (contractFileHelp) {
@@ -162,14 +271,17 @@ const setContractEditMode = (button, preserveValues = false) => {
     if (contractModalTitle) contractModalTitle.textContent = 'Edit contract';
     if (contractModalDescription) contractModalDescription.textContent = 'Update the title, file, or recipients for this contract.';
     if (contractSubmitButton instanceof HTMLButtonElement) contractSubmitButton.textContent = 'Save changes';
+    updateContractDocumentMode();
     updateContractRecipientMode();
     filterContractRecipients();
     showContractModal();
 };
 
 if (contractDepartmentChoice instanceof HTMLElement && contractIndividualChoice instanceof HTMLElement) {
+    updateContractDocumentMode();
     updateContractRecipientMode();
 }
+contractDocumentModeInputs.forEach((input) => input.addEventListener('change', updateContractDocumentMode));
 
 contractOpenButton?.addEventListener('click', setContractCreateMode);
 contractEditButtons.forEach((button) => {
@@ -186,6 +298,40 @@ document.addEventListener('keydown', (event) => {
 contractModeInputs.forEach((input) => input.addEventListener('change', updateContractRecipientMode));
 contractRecipientSearch?.addEventListener('input', filterContractRecipients);
 
+contractModal?.querySelectorAll('[data-contract-command]').forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => {
+        if (!(contractEditor instanceof HTMLElement)) return;
+        contractEditor.focus();
+        document.execCommand(button.dataset.contractCommand, false);
+        syncContractEditor();
+    });
+});
+
+contractEditorBlock?.addEventListener('focus', rememberContractEditorRange);
+contractEditorBlock?.addEventListener('change', () => {
+    if (!(contractEditor instanceof HTMLElement) || !(contractEditorBlock instanceof HTMLSelectElement)) return;
+    restoreContractEditorRange();
+    document.execCommand('formatBlock', false, `<${contractEditorBlock.value}>`);
+    syncContractEditor();
+});
+
+contractPlaceholder?.addEventListener('change', () => {
+    if (
+        !(contractEditor instanceof HTMLElement)
+        || !(contractPlaceholder instanceof HTMLSelectElement)
+        || !contractPlaceholder.value
+    ) return;
+    restoreContractEditorRange();
+    document.execCommand('insertText', false, contractPlaceholder.value);
+    contractPlaceholder.value = '';
+    rememberContractEditorRange();
+    syncContractEditor();
+});
+contractEditor?.addEventListener('keyup', rememberContractEditorRange);
+contractEditor?.addEventListener('mouseup', rememberContractEditorRange);
+contractPlaceholder?.addEventListener('focus', rememberContractEditorRange);
+
 if (contractModal instanceof HTMLElement && !contractModal.hidden) {
     const recordId = contractRecordId instanceof HTMLInputElement ? contractRecordId.value : '';
     const editButton = contractEditButtons.find((button) => button.dataset.contractId === recordId);
@@ -201,6 +347,15 @@ if (contractModal instanceof HTMLElement && !contractModal.hidden) {
 
 contractForm?.addEventListener('submit', (event) => {
     if (!event.currentTarget.checkValidity()) return;
+    const source = contractSourceInput instanceof HTMLInputElement ? contractSourceInput.value : 'upload';
+    if (source === 'editor') {
+        syncContractEditor();
+        if (!(contractContentHtml instanceof HTMLTextAreaElement) || !contractContentHtml.value.replace(/<[^>]*>/g, '').trim()) {
+            event.preventDefault();
+            contractEditor?.focus();
+            return;
+        }
+    }
     if (contractSubmitButton instanceof HTMLButtonElement) {
         contractSubmitButton.disabled = true;
         contractSubmitButton.textContent = 'Saving…';

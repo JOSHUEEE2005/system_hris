@@ -24,7 +24,7 @@
         <div class="contract-page-heading">
             <div>
                 <h2>{{ $canManageContracts ? 'Contracts and files' : 'Contracts shared with you' }}</h2>
-                <p>{{ $canManageContracts ? 'Upload a file and deliver it to a department or selected employees.' : 'Review, download, and acknowledge contracts sent to you by HR.' }}</p>
+                <p>{{ $canManageContracts ? 'Create a contract or upload a file, then deliver it to a department or selected employees.' : 'Review, download, and acknowledge contracts sent to you by HR.' }}</p>
             </div>
             @if ($canManageContracts)
                 <button id="open-contract-modal" class="contract-primary-button" type="button">＋ <span>New Contract</span></button>
@@ -48,7 +48,8 @@
             <div class="contract-grid" id="contract-grid">
                 @foreach ($contracts as $contract)
                     @php
-                        $isPreviewable = in_array($contract->mime_type, $previewableMimeTypes, true);
+                        $isTemplate = $contract->content_html !== null;
+                        $isPreviewable = $isTemplate || in_array($contract->mime_type, $previewableMimeTypes, true);
                         $isImage = str_starts_with($contract->mime_type, 'image/');
                         $recipient = $canManageContracts ? null : $contract->recipients->first();
                         $departmentName = $contract->department?->department_name;
@@ -62,7 +63,7 @@
                         <div class="contract-preview">
                             @if ($isPreviewable && $isImage)
                                 <img src="{{ route('admin.contracts.preview', $contract) }}" alt="Preview of {{ $contract->original_filename }}" loading="lazy">
-                            @elseif ($contract->mime_type === 'application/pdf')
+                            @elseif ($contract->mime_type === 'application/pdf' || $isTemplate)
                                 <iframe src="{{ route('admin.contracts.preview', $contract) }}" title="Preview of {{ $contract->original_filename }}" loading="lazy"></iframe>
                             @else
                                 <div class="contract-file-placeholder">
@@ -107,7 +108,12 @@
                                 @if ($isPreviewable)
                                     <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', $contract) }}" target="_blank" rel="noopener">Preview</a>
                                 @endif
-                                <a class="contract-action-primary" href="{{ route('admin.contracts.download', $contract) }}">Download</a>
+                                @if ($isTemplate)
+                                    <a class="contract-action-primary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'pdf']) }}">PDF</a>
+                                    <a class="contract-action-secondary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'docx']) }}">Word</a>
+                                @else
+                                    <a class="contract-action-primary" href="{{ route('admin.contracts.download', $contract) }}">Download</a>
+                                @endif
                                 @if ($canManageContracts)
                                     <button
                                         class="contract-action-secondary"
@@ -119,6 +125,8 @@
                                         data-title="{{ $contract->title }}"
                                         data-filename="{{ $contract->original_filename }}"
                                         data-recipient-type="{{ $contract->recipient_type }}"
+                                        data-source-type="{{ $isTemplate ? 'editor' : 'upload' }}"
+                                        data-content-html="{{ $contract->content_html }}"
                                         data-department-id="{{ $contract->department_id ?? '' }}"
                                         data-recipient-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
                                     >Edit</button>
@@ -150,14 +158,15 @@
                     <div>
                         <span class="contract-modal-eyebrow">CONTRACT MANAGEMENT</span>
                         <h2 id="contract-modal-title">Send a new contract</h2>
-                        <p id="contract-modal-description">Upload a file and choose who should receive it.</p>
+                        <p id="contract-modal-description">Create a contract or upload a file and choose who should receive it.</p>
                     </div>
                     <button class="contract-modal-close" type="button" data-close-contract-modal aria-label="Close">×</button>
                 </header>
-                <form class="contract-form" method="POST" action="{{ route('admin.contracts.store') }}" data-store-url="{{ route('admin.contracts.store') }}" enctype="multipart/form-data">
+                <form class="contract-form" method="POST" action="{{ route('admin.contracts.store') }}" data-store-url="{{ route('admin.contracts.store') }}" data-current-source="new" enctype="multipart/form-data">
                     @csrf
                     <input id="contract-method" type="hidden" name="_method" value="PUT" disabled>
                     <input id="contract-record-id" type="hidden" name="contract_id" value="{{ old('contract_id') }}">
+                    <input id="contract-source" type="hidden" name="contract_source" value="{{ old('contract_source', 'upload') }}">
                     @if ($errors->any())
                         <div class="contract-form-errors" role="alert">
                             <strong>Please review the following:</strong>
@@ -168,11 +177,46 @@
                         <label for="contract-title">Contract title <span>*</span></label>
                         <input id="contract-title" name="title" value="{{ old('title') }}" maxlength="200" placeholder="e.g. Employment agreement — 2026" required>
                     </div>
-                    <div class="contract-form-field">
+                    <fieldset class="contract-document-mode">
+                        <legend>Contract content</legend>
+                        <label><input type="radio" name="contract_document_mode" value="upload" @checked(old('contract_source', 'upload') === 'upload')><span>Upload file</span></label>
+                        <label><input type="radio" name="contract_document_mode" value="editor" @checked(old('contract_source') === 'editor')><span>Create contract</span></label>
+                    </fieldset>
+                    <div id="contract-upload-panel" class="contract-form-field">
                         <label id="contract-file-label" for="contract-file">Contract file <span>*</span></label>
-                        <input id="contract-file" type="file" name="file" required>
+                        <input id="contract-file" type="file" name="file" @required(old('contract_source', 'upload') === 'upload')>
                         <small id="contract-file-help">Any file type is accepted, up to 35 MB. PDF and common image files preview here; other types can be downloaded.</small>
                         <p id="contract-current-file" class="contract-current-file" hidden>Current file: <strong id="contract-current-filename"></strong></p>
+                    </div>
+                    <div id="contract-editor-panel" class="contract-form-field" hidden>
+                        <label for="contract-editor">Write your contract <span>*</span></label>
+                        <div class="contract-editor-toolbar" role="toolbar" aria-label="Contract formatting">
+                            <button type="button" data-contract-command="bold" aria-label="Bold"><strong>B</strong></button>
+                            <button type="button" data-contract-command="italic" aria-label="Italic"><em>I</em></button>
+                            <button type="button" data-contract-command="underline" aria-label="Underline"><u>U</u></button>
+                            <button type="button" data-contract-command="insertUnorderedList" aria-label="Bulleted list">• List</button>
+                            <button type="button" data-contract-command="insertOrderedList" aria-label="Numbered list">1. List</button>
+                            <select id="contract-editor-block" aria-label="Text style">
+                                <option value="p">Paragraph</option>
+                                <option value="h1">Heading 1</option>
+                                <option value="h2">Heading 2</option>
+                                <option value="h3">Heading 3</option>
+                            </select>
+                            <label for="contract-placeholder">Insert field</label>
+                            <select id="contract-placeholder" aria-label="Insert personalized field">
+                                <option value="">Choose field</option>
+                                <option value="[User Full Name]">User Full Name</option>
+                                <option value="[Work Email]">Work Email</option>
+                                <option value="[Department]">Department</option>
+                                <option value="[Employee ID]">Employee ID</option>
+                                <option value="[Designation]">Designation / Position</option>
+                                <option value="[Role]">Role</option>
+                                <option value="[Status]">Status</option>
+                            </select>
+                        </div>
+                        <div id="contract-editor" class="contract-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contract text">{!! $oldContractContentHtml !!}</div>
+                        <textarea id="contract-content-html" name="content_html" hidden>{{ old('content_html') }}</textarea>
+                        <small>Personalized fields are filled for each recipient. You can download the finished contract as PDF or Word.</small>
                     </div>
                     <fieldset class="contract-recipient-fieldset">
                         <legend>Send to <span>*</span></legend>

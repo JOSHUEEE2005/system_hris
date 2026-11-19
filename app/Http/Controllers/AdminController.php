@@ -24,25 +24,36 @@ class AdminController extends Controller
     {
         $actor = auth()->user();
         $can = fn (string $permission): bool => $actor->hasPermission($permission);
+        $canManageUsers = $can('users.manage');
+        $canManageEmployees = $can('employees.manage');
+        $canManageDepartments = $can('departments.manage') || $canManageEmployees;
+        $canReviewOnboarding = $can('onboarding.review');
+        $canViewAudit = $can('audit.view');
 
         return view('admin.dashboard', [
-            'pending' => $can('onboarding.review')
-                ? OnboardingRequest::with('user')->where('status', 'Pending')->latest()->get()
+            'pendingCount' => $canReviewOnboarding
+                ? OnboardingRequest::where('status', 'Pending')->count()
+                : 0,
+            'userCount' => $canManageUsers ? User::count() : 0,
+            'activeUserCount' => $canManageUsers ? User::where('status', 'Active')->count() : 0,
+            'employeeCount' => $canManageEmployees ? Employee::count() : 0,
+            'activeEmployeeCount' => $canManageEmployees
+                ? Employee::where('status', 'Active')->count()
+                : 0,
+            'inactiveEmployeeCount' => $canManageEmployees
+                ? Employee::where('status', 'Inactive')->count()
+                : 0,
+            'internCount' => $canManageEmployees
+                ? Employee::where('employment_type', 'Internship')->count()
+                : 0,
+            'departmentCount' => $canManageDepartments ? Department::count() : 0,
+            'auditLogs' => $canViewAudit
+                ? AuditLog::with('actor:id,name')
+                    ->latest()
+                    ->limit(5)
+                    ->get(['id', 'actor_user_id', 'event_key', 'created_at'])
                 : collect(),
-            'users' => $can('users.manage') ? User::with(['roles', 'employee'])->latest()->get() : collect(),
-            'roles' => $can('roles.manage') ? Role::with('permissions')->withCount('users')->orderBy('name')->get() : collect(),
-            'permissions' => $can('roles.manage') ? Permission::orderBy('permission_key')->get() : collect(),
-            'departments' => $can('departments.manage') || $can('employees.manage')
-                ? Department::withCount('employees')->orderBy('department_name')->get()
-                : collect(),
-            'employees' => $can('employees.manage') ? Employee::with('department')->latest()->get() : collect(),
-            'canManageUsers' => $can('users.manage'),
-            'canManageRoles' => $can('roles.manage'),
-            'canManageDepartments' => $can('departments.manage'),
-            'canManageEmployees' => $can('employees.manage'),
-            'canReviewOnboarding' => $can('onboarding.review'),
-            'auditLogs' => $can('audit.view') ? AuditLog::with('actor')->latest()->limit(50)->get() : collect(),
-            'canViewAudit' => $can('audit.view'),
+            'canViewAudit' => $canViewAudit,
         ]);
     }
 

@@ -18,15 +18,13 @@ class Contract extends Model
         'department_id',
         'created_by',
         'sent_at',
+        'content_html',
     ];
 
-    protected function casts(): array
-    {
-        return [
-            'file_size' => 'integer',
-            'sent_at' => 'datetime',
-        ];
-    }
+    protected $casts = [
+        'file_size' => 'integer',
+        'sent_at' => 'datetime',
+    ];
 
     public function department(): BelongsTo
     {

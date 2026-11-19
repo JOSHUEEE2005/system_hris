@@ -9,10 +9,7 @@ class AuditLog extends Model
 {
     protected $fillable = ['actor_user_id', 'event_key', 'entity_type', 'entity_id', 'details'];
 
-    protected function casts(): array
-    {
-        return ['details' => 'array'];
-    }
+    protected $casts = ['details' => 'array'];
 
     public function actor(): BelongsTo
     {
