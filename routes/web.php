@@ -2,7 +2,9 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AuditHistoryController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ContractController;
 use App\Http\Controllers\RegistrationController;
 
 Route::get('/', function () {
@@ -38,7 +40,15 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
         ->middleware('permission:users.manage|employees.manage')
         ->name('users');
     Route::get('/calendar', [AdminController::class, 'calendarPage'])->name('calendar');
-    Route::get('/contracts', [AdminController::class, 'contractsPage'])->name('contracts');
+    Route::get('/history', [AuditHistoryController::class, 'index'])
+        ->middleware('permission:audit.view')
+        ->name('history');
+    Route::middleware('permission:contracts.view|contracts.manage')->group(function () {
+        Route::get('/contracts', [ContractController::class, 'index'])->name('contracts');
+        Route::get('/contracts/{contract}/preview', [ContractController::class, 'preview'])->name('contracts.preview');
+        Route::get('/contracts/{contract}/download', [ContractController::class, 'download'])->name('contracts.download');
+        Route::post('/contracts/{contract}/received', [ContractController::class, 'markReceived'])->name('contracts.received');
+    });
     Route::get('/leaves', [AdminController::class, 'leavesPage'])->name('leaves');
     Route::get('/onboarding', [AdminController::class, 'onboardingPage'])
         ->middleware('permission:onboarding.review')
@@ -51,6 +61,10 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
 
     Route::middleware('permission:users.manage')->group(function () {
         Route::post('/users', [AdminController::class, 'storeUser'])->name('users.store');
+        Route::middleware('permission:employees.manage')->post(
+            '/users/with-employee',
+            [AdminController::class, 'storeUserWithEmployee'],
+        )->name('users.with-employee.store');
         Route::put('/users/{user}', [AdminController::class, 'updateUser'])->name('users.update');
         Route::delete('/users/{user}', [AdminController::class, 'destroyUser'])->name('users.destroy');
     });
@@ -66,6 +80,12 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
         Route::get('/employees/list', [AdminController::class, 'employeeList'])->name('employees.list');
         Route::put('/employees/{employee}', [AdminController::class, 'updateEmployee'])->name('employees.update');
         Route::delete('/employees/{employee}', [AdminController::class, 'destroyEmployee'])->name('employees.destroy');
+    });
+
+    Route::middleware('permission:contracts.manage')->group(function () {
+        Route::post('/contracts', [ContractController::class, 'store'])->name('contracts.store');
+        Route::put('/contracts/{contract}', [ContractController::class, 'update'])->name('contracts.update');
+        Route::delete('/contracts/{contract}', [ContractController::class, 'destroy'])->name('contracts.destroy');
     });
 
     Route::middleware('permission:roles.manage')->group(function () {

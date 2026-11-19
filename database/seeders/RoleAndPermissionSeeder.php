@@ -12,6 +12,8 @@ class RoleAndPermissionSeeder extends Seeder
     {
         $permissions = [
             'users.manage' => 'Manage user accounts',
+            'contracts.view' => 'View contracts assigned to the signed-in user',
+            'contracts.manage' => 'Upload and distribute employee contracts',
             'roles.manage' => 'Manage roles and permissions',
             'departments.manage' => 'Manage departments',
             'employees.manage' => 'Manage employee records',
@@ -54,6 +56,8 @@ class RoleAndPermissionSeeder extends Seeder
             Permission::whereIn('permission_key', [
                 'departments.manage',
                 'employees.manage',
+                'contracts.view',
+                'contracts.manage',
                 'onboarding.review',
                 'attendance.view',
                 'attendance.manage',
@@ -66,6 +70,7 @@ class RoleAndPermissionSeeder extends Seeder
             Permission::whereIn('permission_key', [
                 'profile.self_view',
                 'profile.self_update',
+                'contracts.view',
                 'attendance.self_view',
                 'leave_requests.self_manage',
             ])->pluck('id'),

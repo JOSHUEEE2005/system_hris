@@ -11,7 +11,59 @@
     </style>
 </head>
 <body class="sa-shell">
-    <header class="sa-top"><div class="w-full px-10"><img class="sa-logo" src="{{ asset('images/gpcci-ahk-logo.png') }}" alt="AHK"></div></header>
+    <header class="sa-top">
+        <div class="sa-top-inner">
+            <img class="sa-logo" src="{{ asset('images/gpcci-ahk-logo.png') }}" alt="AHK">
+            <div class="sa-top-actions">
+                <div class="sa-header-popover" data-header-popover>
+                    <button
+                        class="sa-header-icon-button"
+                        type="button"
+                        aria-label="Notifications"
+                        aria-haspopup="true"
+                        aria-expanded="false"
+                        aria-controls="notifications-panel"
+                        data-header-popover-toggle
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+                        </svg>
+                    </button>
+                    <section id="notifications-panel" class="sa-header-popover-panel" role="region" aria-labelledby="notifications-title" hidden>
+                        <h2 id="notifications-title">Notifications</h2>
+                        <p>No notifications yet.</p>
+                    </section>
+                </div>
+                <div class="sa-header-popover" data-header-popover>
+                    <button
+                        class="sa-header-icon-button"
+                        type="button"
+                        aria-label="Profile"
+                        aria-haspopup="true"
+                        aria-expanded="false"
+                        aria-controls="profile-panel"
+                        data-header-popover-toggle
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="9" />
+                            <circle cx="12" cy="9" r="2.5" />
+                            <path d="M7.5 18a4.5 4.5 0 0 1 9 0" />
+                        </svg>
+                    </button>
+                    <section id="profile-panel" class="sa-header-popover-panel sa-profile-panel" role="region" aria-labelledby="profile-name" hidden>
+                        <div class="sa-profile-summary">
+                            <strong id="profile-name">{{ auth()->user()->name }}</strong>
+                            <span>{{ auth()->user()->email }}</span>
+                        </div>
+                        <form method="POST" action="{{ route('logout') }}">
+                            @csrf
+                            <button class="sa-logout-button" type="submit">Log out</button>
+                        </form>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </header>
     <div class="sa-layout">
         <nav class="sa-side" aria-label="Super Admin navigation">
             <a class="{{ request()->routeIs('admin.dashboard') ? 'active' : '' }}" href="{{ route('admin.dashboard') }}"><span class="sa-icon">⌂</span>HOME</a>
@@ -20,6 +72,9 @@
             <a class="{{ request()->routeIs('admin.contracts') ? 'active' : '' }}" href="{{ route('admin.contracts') }}"><span class="sa-icon">♧</span>Contracts</a>
             <a class="{{ request()->routeIs('admin.leaves') ? 'active' : '' }}" href="{{ route('admin.leaves') }}"><span class="sa-icon">♙</span>Leaves</a>
             <a class="{{ request()->routeIs('admin.onboarding') ? 'active' : '' }}" href="{{ route('admin.onboarding') }}"><span class="sa-icon">☑</span>Onboarding</a>
+            @if (auth()->user()->hasPermission('audit.view'))
+                <a class="{{ request()->routeIs('admin.history') ? 'active' : '' }}" href="{{ route('admin.history') }}"><span class="sa-icon">↺</span>History</a>
+            @endif
         </nav>
         <main class="sa-main">{{ $slot }}</main>
     </div>

@@ -30,7 +30,7 @@ class Employee extends Model
 
     protected function casts(): array
     {
-        return ['hire_date' => 'date', 'salary' => 'decimal:2'];
+        return ['hire_date' => 'date', 'last_date' => 'date', 'salary' => 'decimal:2'];
     }
 
     public function department(): BelongsTo

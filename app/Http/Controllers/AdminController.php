@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
+use App\Models\ContractRecipient;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Models\OnboardingRequest;
@@ -60,11 +61,6 @@ class AdminController extends Controller
     public function calendarPage(): View
     {
         return view('admin.placeholder', ['pageTitle' => 'Calendar', 'pageDescription' => 'Manage HR events and schedules.']);
-    }
-
-    public function contractsPage(): View
-    {
-        return view('admin.placeholder', ['pageTitle' => 'Contracts', 'pageDescription' => 'Manage employee contracts and documents.']);
     }
 
     public function leavesPage(): View
@@ -204,6 +200,68 @@ class AdminController extends Controller
         return back()->with('status', 'User account created.');
     }
 
+    public function storeUserWithEmployee(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'employee_name' => ['required', 'string', 'max:200'],
+            'email' => ['required', 'email', 'max:150', 'unique:users,email', 'unique:employees,email'],
+            'password' => ['required', 'string', 'min:12', 'confirmed'],
+            'role_id' => ['required', 'integer', 'exists:roles,id'],
+            'department_id' => ['required', 'integer', 'exists:departments,id'],
+            'designation' => ['required', 'string', 'max:100'],
+            'starting_date' => ['required', 'date'],
+            'period' => ['nullable', 'string', 'max:100', 'required_if:employment_type,Internship'],
+            'id_number' => ['required', 'string', 'max:20', 'unique:employees,employee_no'],
+            'preparer' => ['required', 'string', 'max:150'],
+            'assigned_it' => ['required', 'string', 'max:150'],
+            'last_date' => ['nullable', 'date', 'after_or_equal:starting_date'],
+            'employment_status' => ['required', Rule::in(['Employee', 'Intern'])],
+            'employment_type' => ['required', Rule::in(['Employment', 'Internship'])],
+        ]);
+
+        $expectedEmploymentStatus = $data['employment_type'] === 'Internship' ? 'Intern' : 'Employee';
+        if ($data['employment_status'] !== $expectedEmploymentStatus) {
+            return back()->withErrors([
+                'employment_status' => 'Employment status must match the selected employment type.',
+            ])->withInput();
+        }
+
+        DB::transaction(function () use ($data, $request): void {
+            [$firstName, $lastName] = $this->splitName($data['employee_name']);
+            $employee = Employee::create([
+                'employee_no' => $data['id_number'],
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'email' => strtolower(trim($data['email'])),
+                'department_id' => $data['department_id'],
+                'position' => $data['designation'],
+                'hire_date' => $data['starting_date'],
+                'period' => $data['period'] ?? null,
+                'preparer' => $data['preparer'],
+                'assigned_it' => $data['assigned_it'],
+                'last_date' => $data['last_date'] ?? null,
+                'employment_status' => $data['employment_status'],
+                'employment_type' => $data['employment_type'],
+                'status' => 'Active',
+            ]);
+            $user = User::create([
+                'name' => $data['employee_name'],
+                'email' => strtolower(trim($data['email'])),
+                'password_hash' => Hash::make($data['password']),
+                'employee_id' => $employee->id,
+                'department_id' => $employee->department_id,
+                'status' => 'Active',
+                'email_verified_at' => now(),
+            ]);
+            $user->roles()->sync([$data['role_id']]);
+
+            $this->audit($request, 'employee.created', 'employee', $employee->id);
+            $this->audit($request, 'user.created', 'user', $user->id);
+        });
+
+        return back()->with('status', 'Employee profile and user account created.');
+    }
+
     public function updateUser(Request $request, User $user): RedirectResponse
     {
         $data = $request->validate([
@@ -237,6 +295,10 @@ class AdminController extends Controller
 
     public function destroyUser(Request $request, User $user): RedirectResponse
     {
+        if (ContractRecipient::where('user_id', $user->id)->exists()) {
+            return back()->withErrors(['user' => 'A user with contract records cannot be deleted. Disable the account to preserve its receipt history.']);
+        }
+
         if ($user->status === 'Active' && $user->roles()->where('slug', 'super-admin')->exists()
             && $this->activeSuperAdminCount() < 2) {
             return back()->withErrors(['user' => 'You cannot delete the last active Super Admin.']);
