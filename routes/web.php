@@ -65,6 +65,10 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
             '/users/with-employee',
             [AdminController::class, 'storeUserWithEmployee'],
         )->name('users.with-employee.store');
+        Route::middleware('permission:employees.manage')->put(
+            '/users/{user}/profile',
+            [AdminController::class, 'updateUserProfile'],
+        )->name('users.profile.update');
         Route::put('/users/{user}', [AdminController::class, 'updateUser'])->name('users.update');
         Route::delete('/users/{user}', [AdminController::class, 'destroyUser'])->name('users.destroy');
     });
@@ -83,6 +87,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     });
 
     Route::middleware('permission:contracts.manage')->group(function () {
+        Route::post('/contracts/folders', [ContractController::class, 'storeFolder'])->name('contracts.folders.store');
         Route::post('/contracts', [ContractController::class, 'store'])->name('contracts.store');
         Route::put('/contracts/{contract}', [ContractController::class, 'update'])->name('contracts.update');
         Route::delete('/contracts/{contract}', [ContractController::class, 'destroy'])->name('contracts.destroy');

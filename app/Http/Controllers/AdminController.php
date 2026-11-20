@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\ContractRecipient;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Intern;
 use App\Models\OnboardingRequest;
 use App\Models\Permission;
 use App\Models\Role;
@@ -14,12 +15,23 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Illuminate\Http\JsonResponse;
 
 class AdminController extends Controller
 {
+    private const HR_DEPARTMENTS = [
+        'Chamber Services',
+        'Dual Training',
+        'Government Affairs',
+        'Trade Promotions',
+        'Communications',
+        'Internal Org',
+        'Internal Organization',
+    ];
+
     public function dashboard(): View
     {
         $actor = auth()->user();
@@ -36,15 +48,16 @@ class AdminController extends Controller
                 : 0,
             'userCount' => $canManageUsers ? User::count() : 0,
             'activeUserCount' => $canManageUsers ? User::where('status', 'Active')->count() : 0,
-            'employeeCount' => $canManageEmployees ? Employee::count() : 0,
-            'activeEmployeeCount' => $canManageEmployees
-                ? Employee::where('status', 'Active')->count()
+            'employeeCount' => $canManageEmployees
+                ? Employee::where('employment_type', '!=', 'Internship')->count()
                 : 0,
+            'activeEmployeeCount' => $canManageEmployees ? Employee::where('employment_type', '!=', 'Internship')
+                ->where('status', 'Active')->count() : 0,
             'inactiveEmployeeCount' => $canManageEmployees
-                ? Employee::where('status', 'Inactive')->count()
+                ? Employee::where('employment_type', '!=', 'Internship')->where('status', 'Inactive')->count()
                 : 0,
             'internCount' => $canManageEmployees
-                ? Employee::where('employment_type', 'Internship')->count()
+                ? Intern::count()
                 : 0,
             'departmentCount' => $canManageDepartments ? Department::count() : 0,
             'auditLogs' => $canViewAudit
@@ -60,18 +73,38 @@ class AdminController extends Controller
     public function usersPage(): View
     {
         return view('admin.users', [
-            'users' => User::with(['roles', 'employee.department', 'department'])->latest()->get(),
+            'users' => User::with(['roles', 'employee.department', 'intern.department', 'department'])->latest()->get(),
             'roles' => Role::with('permissions')->withCount('users')->orderBy('name')->get(),
             'employees' => Employee::with('department')->latest()->get(),
-            'departments' => Department::withCount('employees')->orderBy('department_name')->get(),
+            'departments' => Department::whereIn('department_name', self::HR_DEPARTMENTS)
+                ->withCount(['employees', 'interns'])
+                ->orderBy('department_name')
+                ->get(),
             'canManageUsers' => auth()->user()->hasPermission('users.manage'),
             'canManageEmployees' => auth()->user()->hasPermission('employees.manage'),
         ]);
     }
 
-    public function calendarPage(): View
+    public function calendarPage(Request $request): View
     {
-        return view('admin.placeholder', ['pageTitle' => 'Calendar', 'pageDescription' => 'Manage HR events and schedules.']);
+        $validator = Validator::make($request->query(), [
+            'view' => ['sometimes', Rule::in(['month', 'year'])],
+            'year' => ['sometimes', 'integer', 'between:1900,2100'],
+            'month' => ['sometimes', 'integer', 'between:1,12'],
+        ]);
+        abort_if($validator->fails(), 404);
+        $data = $validator->validated();
+        $year = (int) ($data['year'] ?? now()->year);
+        $month = (int) ($data['month'] ?? now()->month);
+        $selectedMonth = now()->startOfYear()->setYear($year)->setMonth($month);
+
+        return view('admin.calendar', [
+            'viewMode' => $data['view'] ?? 'month',
+            'selectedMonth' => $selectedMonth,
+            'selectedYear' => $year,
+            'minimumCalendarYear' => 1900,
+            'maximumCalendarYear' => 2100,
+        ]);
     }
 
     public function leavesPage(): View
@@ -180,7 +213,13 @@ class AdminController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:150', 'unique:users,email'],
+            'email' => [
+                'required',
+                'email',
+                'max:150',
+                'unique:users,email',
+                $isEmployee ? Rule::unique('employees', 'email') : Rule::unique('interns', 'email'),
+            ],
             'password' => ['required', 'string', 'min:12', 'confirmed'],
             'role_id' => ['required', 'integer', 'exists:roles,id'],
             'employee_id' => ['nullable', 'integer', 'exists:employees,id', 'unique:users,employee_id'],
@@ -213,64 +252,151 @@ class AdminController extends Controller
 
     public function storeUserWithEmployee(Request $request): RedirectResponse
     {
+        $profileType = $request->input('profile_type', 'employee');
+        $isEmployee = $profileType === 'employee';
+        $isIntern = $profileType === 'intern';
+        $departmentRule = Rule::exists('departments', 'id')->whereIn('department_name', self::HR_DEPARTMENTS);
         $data = $request->validate([
-            'employee_name' => ['required', 'string', 'max:200'],
-            'email' => ['required', 'email', 'max:150', 'unique:users,email', 'unique:employees,email'],
+            'profile_type' => ['required', Rule::in(['employee', 'intern'])],
+            'email' => ['required', 'email', 'max:150', 'unique:users,email'],
             'password' => ['required', 'string', 'min:12', 'confirmed'],
             'role_id' => ['required', 'integer', 'exists:roles,id'],
-            'department_id' => ['required', 'integer', 'exists:departments,id'],
-            'designation' => ['required', 'string', 'max:100'],
-            'starting_date' => ['required', 'date'],
-            'period' => ['nullable', 'string', 'max:100', 'required_if:employment_type,Internship'],
-            'id_number' => ['required', 'string', 'max:20', 'unique:employees,employee_no'],
-            'preparer' => ['required', 'string', 'max:150'],
-            'assigned_it' => ['required', 'string', 'max:150'],
-            'last_date' => ['nullable', 'date', 'after_or_equal:starting_date'],
-            'employment_status' => ['required', Rule::in(['Employee', 'Intern'])],
-            'employment_type' => ['required', Rule::in(['Employment', 'Internship'])],
+            'department_id' => ['required', 'integer', $departmentRule],
+            'employee_no' => [$isEmployee ? 'required' : 'nullable', 'string', 'max:20', 'unique:employees,employee_no'],
+            'first_name' => [$isEmployee ? 'required' : 'nullable', 'string', 'max:100'],
+            'middle_name' => ['nullable', 'string', 'max:100'],
+            'last_name' => [$isEmployee ? 'required' : 'nullable', 'string', 'max:100'],
+            'nationality' => ['nullable', 'string', 'max:100'],
+            'gender' => ['nullable', Rule::in(['Male', 'Female'])],
+            'position' => ['required', 'string', 'max:100'],
+            'immediate_supervisor' => ['nullable', 'string', 'max:200'],
+            'hire_date' => [$isEmployee ? 'required' : 'nullable', 'date'],
+            'regularized_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'birth_date' => ['nullable', 'date', 'before_or_equal:today'],
+            'employment_status' => [
+                $isEmployee ? 'required' : 'nullable',
+                Rule::in(['Active', 'Resigned', 'Active OIO', 'Active project based', 'Active agency']),
+            ],
+            'last_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'sss_number' => ['nullable', 'string', 'max:50'],
+            'tin_number' => ['nullable', 'string', 'max:50'],
+            'hdmf_number' => ['nullable', 'string', 'max:50'],
+            'philhealth_number' => ['nullable', 'string', 'max:50'],
+            'address' => ['nullable', 'string', 'max:10000'],
+            'contact_number' => ['nullable', 'string', 'max:30'],
+            'place_of_birth' => ['nullable', 'string', 'max:255'],
+            'emergency_contact_person' => ['nullable', 'string', 'max:200'],
+            'emergency_contact_number' => ['nullable', 'string', 'max:30'],
+            'personal_email' => ['nullable', 'email', 'max:150'],
+            'hmo_status' => ['nullable', Rule::in(['Yes', 'No', 'N/A', 'Upon regularization'])],
+            'ecu' => ['nullable', 'string', 'max:100'],
+            'mobile_subscription' => ['nullable', Rule::in(['Yes 1499 subs', 'Yes 1799 subs', 'Yes 799 subs'])],
+            'gpcci_mobile_number' => ['nullable', 'string', 'max:30'],
+            'sick_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'birthday_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'vacation_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'business_card' => ['nullable', 'boolean'],
+            'intern_no' => [$isIntern ? 'required' : 'nullable', 'string', 'max:30', 'unique:interns,intern_no'],
+            'intern_name' => [$isIntern ? 'required' : 'nullable', 'string', 'max:255'],
+            'designation' => [$isIntern ? 'required' : 'nullable', 'string', 'max:150'],
+            'internship_start_date' => [$isIntern ? 'required' : 'nullable', 'date'],
+            'internship_end_date' => ['nullable', 'date', 'after_or_equal:internship_start_date'],
+            'internship_status' => [
+                $isIntern ? 'required' : 'nullable',
+                Rule::in(['Finished', 'Pre terminated', 'Active', 'Cancelled']),
+            ],
+            'intern_address' => ['nullable', 'string', 'max:10000'],
+            'intern_contact_number' => ['nullable', 'string', 'max:30'],
+            'university' => ['nullable', 'string', 'max:200'],
+            'course' => ['nullable', 'string', 'max:200'],
+            'degree_expected' => ['nullable', 'string', 'max:200'],
         ]);
 
-        $expectedEmploymentStatus = $data['employment_type'] === 'Internship' ? 'Intern' : 'Employee';
-        if ($data['employment_status'] !== $expectedEmploymentStatus) {
-            return back()->withErrors([
-                'employment_status' => 'Employment status must match the selected employment type.',
-            ])->withInput();
-        }
-
-        DB::transaction(function () use ($data, $request): void {
-            [$firstName, $lastName] = $this->splitName($data['employee_name']);
-            $employee = Employee::create([
-                'employee_no' => $data['id_number'],
-                'first_name' => $firstName,
-                'last_name' => $lastName,
-                'email' => strtolower(trim($data['email'])),
-                'department_id' => $data['department_id'],
-                'position' => $data['designation'],
-                'hire_date' => $data['starting_date'],
-                'period' => $data['period'] ?? null,
-                'preparer' => $data['preparer'],
-                'assigned_it' => $data['assigned_it'],
-                'last_date' => $data['last_date'] ?? null,
-                'employment_status' => $data['employment_status'],
-                'employment_type' => $data['employment_type'],
-                'status' => 'Active',
-            ]);
+        DB::transaction(function () use ($data, $request, $isEmployee): void {
+            $profile = $isEmployee
+                ? Employee::create([
+                    'employee_no' => $data['employee_no'],
+                    'first_name' => trim($data['first_name']),
+                    'middle_name' => $data['middle_name'] ?? null,
+                    'last_name' => trim($data['last_name']),
+                    'full_name' => trim(implode(' ', array_filter([
+                        trim($data['first_name']),
+                        isset($data['middle_name']) ? trim($data['middle_name']) : null,
+                        trim($data['last_name']),
+                    ]))),
+                    'nationality' => $data['nationality'] ?? null,
+                    'email' => strtolower(trim($data['email'])),
+                    'department_id' => $data['department_id'],
+                    'position' => $data['position'] ?? null,
+                    'hire_date' => $data['hire_date'],
+                    'regularized_date' => $data['regularized_date'] ?? null,
+                    'birth_date' => $data['birth_date'] ?? null,
+                    'gender' => $data['gender'] ?? null,
+                    'immediate_supervisor' => $data['immediate_supervisor'] ?? null,
+                    'employment_status' => $data['employment_status'],
+                    'last_date' => $data['last_date'] ?? null,
+                    'sss_number' => $data['sss_number'] ?? null,
+                    'tin_number' => $data['tin_number'] ?? null,
+                    'hdmf_number' => $data['hdmf_number'] ?? null,
+                    'philhealth_number' => $data['philhealth_number'] ?? null,
+                    'address' => $data['address'] ?? null,
+                    'contact_number' => $data['contact_number'] ?? null,
+                    'place_of_birth' => $data['place_of_birth'] ?? null,
+                    'emergency_contact_person' => $data['emergency_contact_person'] ?? null,
+                    'emergency_contact_number' => $data['emergency_contact_number'] ?? null,
+                    'personal_email' => $data['personal_email'] ?? null,
+                    'hmo_status' => $data['hmo_status'] ?? null,
+                    'ecu' => $data['ecu'] ?? null,
+                    'mobile_subscription' => $data['mobile_subscription'] ?? null,
+                    'gpcci_mobile_number' => $data['gpcci_mobile_number'] ?? null,
+                    'sick_leave_days' => $data['sick_leave_days'] ?? null,
+                    'birthday_leave_days' => $data['birthday_leave_days'] ?? null,
+                    'vacation_leave_days' => $data['vacation_leave_days'] ?? null,
+                    'business_card' => $request->boolean('business_card'),
+                    'employment_type' => 'Employment',
+                    'status' => $data['employment_status'] === 'Resigned' ? 'Inactive' : 'Active',
+                ])
+                : Intern::create([
+                    'intern_no' => $data['intern_no'],
+                    'intern_name' => trim($data['intern_name']),
+                    'designation' => $data['designation'],
+                    'email' => strtolower(trim($data['email'])),
+                    'birth_date' => $data['birth_date'] ?? null,
+                    'internship_start_date' => $data['internship_start_date'],
+                    'internship_end_date' => $data['internship_end_date'] ?? null,
+                    'gender' => $data['gender'] ?? null,
+                    'department_id' => $data['department_id'],
+                    'position' => $data['position'] ?? null,
+                    'immediate_supervisor' => $data['immediate_supervisor'] ?? null,
+                    'address' => $data['intern_address'] ?? null,
+                    'contact_number' => $data['intern_contact_number'] ?? null,
+                    'personal_email' => $data['personal_email'] ?? null,
+                    'university' => $data['university'] ?? null,
+                    'course' => $data['course'] ?? null,
+                    'degree_expected' => $data['degree_expected'] ?? null,
+                    'internship_status' => $data['internship_status'],
+                ]);
             $user = User::create([
-                'name' => $data['employee_name'],
+                'name' => $isEmployee ? $profile->full_name : $profile->intern_name,
                 'email' => strtolower(trim($data['email'])),
                 'password_hash' => Hash::make($data['password']),
-                'employee_id' => $employee->id,
-                'department_id' => $employee->department_id,
+                'employee_id' => $isEmployee ? $profile->id : null,
+                'department_id' => $profile->department_id,
                 'status' => 'Active',
                 'email_verified_at' => now(),
             ]);
+            if (! $isEmployee) {
+                $profile->update(['user_id' => $user->id]);
+            }
             $user->roles()->sync([$data['role_id']]);
 
-            $this->audit($request, 'employee.created', 'employee', $employee->id);
+            $this->audit($request, $isEmployee ? 'employee.created' : 'intern.created', $isEmployee ? 'employee' : 'intern', $profile->id);
             $this->audit($request, 'user.created', 'user', $user->id);
         });
 
-        return back()->with('status', 'Employee profile and user account created.');
+        return back()->with('status', $isEmployee
+            ? 'Employee profile and user account created.'
+            : 'Intern profile and user account created.');
     }
 
     public function updateUser(Request $request, User $user): RedirectResponse
@@ -302,6 +428,180 @@ class AdminController extends Controller
         $this->audit($request, 'user.updated', 'user', $user->id);
 
         return back()->with('status', 'User account updated.');
+    }
+
+    public function updateUserProfile(Request $request, User $user): RedirectResponse
+    {
+        $intern = $user->intern;
+        $employee = $intern ? null : $user->employee;
+        abort_unless($intern || $employee, 404);
+
+        $isIntern = $intern !== null;
+        $employeeNoRule = Rule::unique('employees', 'employee_no');
+        $internNoRule = Rule::unique('interns', 'intern_no');
+        if ($employee) {
+            $employeeNoRule->ignore($employee->id);
+        }
+        if ($intern) {
+            $internNoRule->ignore($intern->id);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'email' => ['required', 'email', 'max:150', Rule::unique('users', 'email')->ignore($user->id)],
+            'role_id' => ['required', 'integer', 'exists:roles,id'],
+            'status' => ['required', Rule::in(['Pending', 'Active', 'Disabled'])],
+            'department_id' => [
+                'required',
+                'integer',
+                Rule::exists('departments', 'id')->whereIn('department_name', self::HR_DEPARTMENTS),
+            ],
+            'gender' => ['nullable', Rule::in(['Male', 'Female'])],
+            'position' => ['required', 'string', 'max:'.($isIntern ? 150 : 100)],
+            'immediate_supervisor' => ['nullable', 'string', 'max:200'],
+            'personal_email' => ['nullable', 'email', 'max:150'],
+            'birth_date' => ['nullable', 'date', 'before_or_equal:today'],
+            'employee_no' => [$isIntern ? 'nullable' : 'required', 'string', 'max:20', $employeeNoRule],
+            'first_name' => [$isIntern ? 'nullable' : 'required', 'string', 'max:100'],
+            'middle_name' => ['nullable', 'string', 'max:100'],
+            'last_name' => [$isIntern ? 'nullable' : 'required', 'string', 'max:100'],
+            'nationality' => ['nullable', 'string', 'max:100'],
+            'hire_date' => [$isIntern ? 'nullable' : 'required', 'date'],
+            'regularized_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'employment_status' => [
+                $isIntern ? 'nullable' : 'required',
+                Rule::in(['Active', 'Resigned', 'Active OIO', 'Active project based', 'Active agency']),
+            ],
+            'last_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'sss_number' => ['nullable', 'string', 'max:50'],
+            'tin_number' => ['nullable', 'string', 'max:50'],
+            'hdmf_number' => ['nullable', 'string', 'max:50'],
+            'philhealth_number' => ['nullable', 'string', 'max:50'],
+            'address' => ['nullable', 'string', 'max:10000'],
+            'contact_number' => ['nullable', 'string', 'max:30'],
+            'place_of_birth' => ['nullable', 'string', 'max:255'],
+            'emergency_contact_person' => ['nullable', 'string', 'max:200'],
+            'emergency_contact_number' => ['nullable', 'string', 'max:30'],
+            'hmo_status' => ['nullable', Rule::in(['Yes', 'No', 'N/A', 'Upon regularization'])],
+            'ecu' => ['nullable', 'string', 'max:100'],
+            'mobile_subscription' => ['nullable', Rule::in(['Yes 1499 subs', 'Yes 1799 subs', 'Yes 799 subs'])],
+            'gpcci_mobile_number' => ['nullable', 'string', 'max:30'],
+            'sick_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'birthday_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'vacation_leave_days' => ['nullable', 'numeric', 'min:0', 'max:9999.99'],
+            'business_card' => ['nullable', 'boolean'],
+            'intern_no' => [$isIntern ? 'required' : 'nullable', 'string', 'max:30', $internNoRule],
+            'intern_name' => [$isIntern ? 'required' : 'nullable', 'string', 'max:255'],
+            'designation' => [$isIntern ? 'required' : 'nullable', 'string', 'max:150'],
+            'internship_start_date' => [$isIntern ? 'required' : 'nullable', 'date'],
+            'internship_end_date' => ['nullable', 'date', 'after_or_equal:internship_start_date'],
+            'internship_status' => [
+                $isIntern ? 'required' : 'nullable',
+                Rule::in(['Finished', 'Pre terminated', 'Active', 'Cancelled']),
+            ],
+            'intern_address' => ['nullable', 'string', 'max:10000'],
+            'intern_contact_number' => ['nullable', 'string', 'max:30'],
+            'university' => ['nullable', 'string', 'max:200'],
+            'course' => ['nullable', 'string', 'max:200'],
+            'degree_expected' => ['nullable', 'string', 'max:200'],
+        ]);
+
+        if ($validator->fails()) {
+            return back()
+                ->withErrors($validator)
+                ->withInput()
+                ->with('edit_user_id', $user->id);
+        }
+
+        $data = $validator->validated();
+        $newRole = Role::findOrFail($data['role_id']);
+        if ($user->status === 'Active' && $user->roles()->where('slug', 'super-admin')->exists()
+            && ($data['status'] !== 'Active' || $newRole->slug !== 'super-admin')
+            && $this->activeSuperAdminCount() < 2) {
+            return back()
+                ->withErrors(['user' => 'You cannot disable or demote the last active Super Admin.'])
+                ->withInput()
+                ->with('edit_user_id', $user->id);
+        }
+
+        DB::transaction(function () use ($data, $employee, $intern, $newRole, $request, $user): void {
+            if ($intern) {
+                $intern->update([
+                    'intern_no' => $data['intern_no'],
+                    'intern_name' => trim($data['intern_name']),
+                    'designation' => $data['designation'],
+                    'email' => strtolower(trim($data['email'])),
+                    'birth_date' => $data['birth_date'] ?? null,
+                    'internship_start_date' => $data['internship_start_date'],
+                    'internship_end_date' => $data['internship_end_date'] ?? null,
+                    'gender' => $data['gender'] ?? null,
+                    'department_id' => $data['department_id'],
+                    'position' => $data['position'],
+                    'immediate_supervisor' => $data['immediate_supervisor'] ?? null,
+                    'address' => $data['intern_address'] ?? null,
+                    'contact_number' => $data['intern_contact_number'] ?? null,
+                    'personal_email' => $data['personal_email'] ?? null,
+                    'university' => $data['university'] ?? null,
+                    'course' => $data['course'] ?? null,
+                    'degree_expected' => $data['degree_expected'] ?? null,
+                    'internship_status' => $data['internship_status'],
+                ]);
+                $name = trim($data['intern_name']);
+            } else {
+                $name = trim(implode(' ', array_filter([
+                    trim($data['first_name']),
+                    isset($data['middle_name']) ? trim($data['middle_name']) : null,
+                    trim($data['last_name']),
+                ])));
+                $employee->update([
+                    'employee_no' => $data['employee_no'],
+                    'first_name' => trim($data['first_name']),
+                    'middle_name' => $data['middle_name'] ?? null,
+                    'last_name' => trim($data['last_name']),
+                    'full_name' => $name,
+                    'nationality' => $data['nationality'] ?? null,
+                    'email' => strtolower(trim($data['email'])),
+                    'contact_number' => $data['contact_number'] ?? null,
+                    'address' => $data['address'] ?? null,
+                    'gender' => $data['gender'] ?? null,
+                    'birth_date' => $data['birth_date'] ?? null,
+                    'hire_date' => $data['hire_date'],
+                    'regularized_date' => $data['regularized_date'] ?? null,
+                    'immediate_supervisor' => $data['immediate_supervisor'] ?? null,
+                    'last_date' => $data['last_date'] ?? null,
+                    'employment_status' => $data['employment_status'],
+                    'department_id' => $data['department_id'],
+                    'position' => $data['position'],
+                    'place_of_birth' => $data['place_of_birth'] ?? null,
+                    'sss_number' => $data['sss_number'] ?? null,
+                    'tin_number' => $data['tin_number'] ?? null,
+                    'hdmf_number' => $data['hdmf_number'] ?? null,
+                    'philhealth_number' => $data['philhealth_number'] ?? null,
+                    'personal_email' => $data['personal_email'] ?? null,
+                    'emergency_contact_person' => $data['emergency_contact_person'] ?? null,
+                    'emergency_contact_number' => $data['emergency_contact_number'] ?? null,
+                    'hmo_status' => $data['hmo_status'] ?? null,
+                    'ecu' => $data['ecu'] ?? null,
+                    'mobile_subscription' => $data['mobile_subscription'] ?? null,
+                    'gpcci_mobile_number' => $data['gpcci_mobile_number'] ?? null,
+                    'sick_leave_days' => $data['sick_leave_days'] ?? null,
+                    'birthday_leave_days' => $data['birthday_leave_days'] ?? null,
+                    'vacation_leave_days' => $data['vacation_leave_days'] ?? null,
+                    'business_card' => $request->boolean('business_card'),
+                    'status' => $data['employment_status'] === 'Resigned' ? 'Inactive' : 'Active',
+                ]);
+            }
+
+            $user->update([
+                'name' => $name,
+                'email' => strtolower(trim($data['email'])),
+                'department_id' => $data['department_id'],
+                'status' => $data['status'],
+            ]);
+            $user->roles()->sync([$newRole->id]);
+            $this->audit($request, 'user.profile_updated', 'user', $user->id);
+        });
+
+        return back()->with('status', 'User profile updated.');
     }
 
     public function destroyUser(Request $request, User $user): RedirectResponse

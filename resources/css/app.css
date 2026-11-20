@@ -459,6 +459,33 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
 }
 .contract-primary-button:hover { background: #094a70; }
 .contract-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 14px; }
+.contract-folder-create { display: flex; width: min(390px, 100%); gap: 8px; margin: 0; }
+.contract-folder-create input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #d5e0e8;
+    border-radius: 8px;
+    padding: 8px 11px;
+    color: var(--ink);
+    font-size: 11px;
+}
+.contract-folder-create .contract-action-secondary { width: auto; padding: 7px 10px; }
+.contract-folder-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 9px; }
+.contract-folder-filter {
+    min-height: 30px;
+    border: 1px solid #d5e0e8;
+    border-radius: 999px;
+    background: #fff;
+    padding: 6px 12px;
+    color: #42647e;
+    cursor: pointer;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+}
+.contract-folder-filter[aria-pressed="true"] { border-color: var(--navy); background: #e8f2f8; color: var(--navy); }
+.contract-folder-error { margin: -5px 0 10px; color: #991b1b; font-size: 11px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .contract-search {
     display: flex;
     width: min(380px, 100%);
@@ -516,6 +543,7 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
 .contract-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .contract-title-row > div { min-width: 0; flex: 1; }
 .contract-title-row h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 800; line-height: 1.4; }
+.contract-folder-label { display: inline-block; margin-top: 9px; border-radius: 999px; background: #e8f2f8; padding: 4px 8px; color: #315d78; font-size: 9px; font-weight: 700; }
 .contract-filename { max-width: 180px; margin: 3px 0 0; overflow: hidden; color: #8193a2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .contract-status-badge { flex: none; border-radius: 999px; background: #fef3c7; padding: 4px 7px; color: #92400e; font-size: 9px; font-weight: 800; }
 .contract-status-badge.received { background: #dcfce7; color: #166534; }
@@ -628,10 +656,19 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
 .contract-editor-toolbar button, .contract-editor-toolbar select { min-height: 31px; border: 1px solid #d5e0e8; border-radius: 5px; background: #fff; padding: 4px 8px; color: #31566f; cursor: pointer; font: inherit; font-size: 10px; }
 .contract-editor-toolbar button { min-width: 32px; }
 .contract-editor-toolbar label { margin-left: auto; color: #587489; font-size: 10px; }
+.contract-editor-toolbar .contract-table-size { display: flex; align-items: center; gap: 4px; margin: 0; color: #587489; font-size: 10px; }
+.contract-form-field .contract-editor-toolbar .contract-table-size input { width: 42px; min-height: 31px; border: 1px solid #d5e0e8; border-radius: 5px; padding: 3px 4px; font-size: 10px; }
 .contract-editor { min-height: 250px; max-height: 420px; overflow: auto; border: 1px solid #ccd8e1; border-radius: 0 0 8px 8px; padding: 14px; color: #173c56; font-size: 13px; line-height: 1.65; outline: 0; }
 .contract-editor:focus { border-color: #0d5b88; box-shadow: 0 0 0 2px #0d5b8814; }
 .contract-editor h1, .contract-editor h2, .contract-editor h3 { color: #173c56; }
 .contract-editor ul, .contract-editor ol { padding-left: 24px; }
+.contract-editor table { width: 100%; margin: 10px 0; border-collapse: collapse; table-layout: fixed; }
+.contract-editor th, .contract-editor td { min-width: 48px; border: 1px solid #b7c8d5; padding: 6px; text-align: left; vertical-align: top; }
+.contract-editor th { background: #edf4f8; font-weight: 800; }
+.contract-editor header, .contract-editor footer { min-height: 32px; margin: 8px 0; border: 1px dashed #8caabd; border-radius: 5px; background: #f7fafc; padding: 7px 10px; }
+.contract-editor header::before, .contract-editor footer::before { display: block; color: #7b8fa0; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.contract-editor header::before { content: "Document header"; }
+.contract-editor footer::before { content: "Document footer"; }
 .contract-form-field > small { color: #7b8fa0; font-size: 10px; line-height: 1.5; }
 .contract-form-field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 17px; }
 .contract-form-field label, .contract-recipient-fieldset legend { color: #294c65; font-size: 12px; font-weight: 800; }

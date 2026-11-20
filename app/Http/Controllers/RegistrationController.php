@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\AuditLog;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Intern;
 use App\Models\OnboardingRequest;
 use App\Models\Role;
 use App\Models\User;
@@ -88,17 +89,29 @@ class RegistrationController extends Controller
                 [$firstName, $lastName] = $this->splitName($validated['name']);
                 $departmentRecord = Department::firstOrCreate(['department_name' => $department]);
                 $user->update(['department_id' => $departmentRecord->id]);
-                $employee = Employee::create([
-                    'employee_no' => 'REG-'.str_pad((string) $user->id, 6, '0', STR_PAD_LEFT),
-                    'first_name' => $firstName,
-                    'last_name' => $lastName,
-                    'email' => $email,
-                    'hire_date' => now()->toDateString(),
-                    'department_id' => $departmentRecord->id,
-                    'status' => 'Active',
-                    'employment_type' => $department === 'Interns' ? 'Internship' : 'Employment',
-                ]);
-                $user->update(['employee_id' => $employee->id]);
+                if ($department === 'Interns') {
+                    Intern::create([
+                        'intern_no' => 'REG-'.str_pad((string) $user->id, 6, '0', STR_PAD_LEFT),
+                        'intern_name' => trim($validated['name']),
+                        'email' => $email,
+                        'internship_start_date' => now()->toDateString(),
+                        'internship_status' => 'Active',
+                        'user_id' => $user->id,
+                    ]);
+                } else {
+                    $employee = Employee::create([
+                        'employee_no' => 'REG-'.str_pad((string) $user->id, 6, '0', STR_PAD_LEFT),
+                        'first_name' => $firstName,
+                        'last_name' => $lastName,
+                        'full_name' => trim($validated['name']),
+                        'email' => $email,
+                        'hire_date' => now()->toDateString(),
+                        'department_id' => $departmentRecord->id,
+                        'status' => 'Active',
+                        'employment_type' => 'Employment',
+                    ]);
+                    $user->update(['employee_id' => $employee->id]);
+                }
             }
             if (! $isAutoAccount) {
                 $onboardingData = [

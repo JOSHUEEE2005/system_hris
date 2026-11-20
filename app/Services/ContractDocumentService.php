@@ -14,9 +14,9 @@ use ZipArchive;
 class ContractDocumentService
 {
     private const ALLOWED_TAGS = [
-        'a', 'b', 'blockquote', 'br', 'div', 'em', 'h1', 'h2', 'h3', 'i',
-        'li', 'ol', 'p', 's', 'span', 'strong', 'table', 'tbody', 'td',
-        'th', 'thead', 'tr', 'u', 'ul',
+        'a', 'b', 'blockquote', 'br', 'div', 'em', 'footer', 'h1', 'h2',
+        'h3', 'header', 'i', 'li', 'ol', 'p', 's', 'span', 'strong',
+        'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul',
     ];
 
     private const DROP_TAGS = ['embed', 'iframe', 'object', 'script', 'style', 'svg'];
@@ -41,7 +41,9 @@ class ContractDocumentService
             return $html;
         }
 
-        $recipient->loadMissing(['department', 'employee.department', 'roles']);
+        $recipient->loadMissing(['department', 'employee.department', 'intern.department', 'roles']);
+        $employee = $recipient->employee;
+        $intern = $recipient->intern;
         $fields = [
             'userfullname' => $recipient->name ?? '',
             'fullname' => $recipient->name ?? '',
@@ -49,12 +51,14 @@ class ContractDocumentService
             'workemail' => $recipient->email,
             'email' => $recipient->email,
             'department' => $recipient->department?->department_name
-                ?? $recipient->employee?->department?->department_name
+                ?? $employee?->department?->department_name
+                ?? $intern?->department?->department_name
                 ?? '',
-            'employeeid' => $recipient->employee?->employee_no ?? '',
-            'employeeno' => $recipient->employee?->employee_no ?? '',
-            'designation' => $recipient->employee?->position ?? '',
-            'position' => $recipient->employee?->position ?? '',
+            'employeeid' => $employee?->employee_no ?? $intern?->intern_no ?? '',
+            'employeeno' => $employee?->employee_no ?? $intern?->intern_no ?? '',
+            'internno' => $intern?->intern_no ?? '',
+            'designation' => $employee?->position ?? $intern?->designation ?? '',
+            'position' => $employee?->position ?? $intern?->position ?? '',
             'role' => $recipient->roles->pluck('name')->implode(', '),
             'roles' => $recipient->roles->pluck('name')->implode(', '),
             'status' => $recipient->status ?? '',
@@ -99,14 +103,57 @@ class ContractDocumentService
     {
         $document = $this->parseFragment($html);
         $root = $this->fragmentRoot($document);
-        $body = '';
+        $headerContent = null;
+        $footerContent = null;
+        $sections = [];
+        foreach ($root->childNodes as $child) {
+            if ($child instanceof DOMElement && in_array(strtolower($child->tagName), ['header', 'footer'], true)) {
+                $sections[] = $child;
+            }
+        }
+        foreach ($sections as $section) {
+            $sectionTag = strtolower($section->tagName);
+            $sectionContent = '';
+            foreach ($section->childNodes as $child) {
+                $sectionContent .= $this->renderWordBlock($child);
+            }
+            if ($sectionTag === 'header') {
+                $headerContent = ($headerContent ?? '').$sectionContent;
+            } else {
+                $footerContent = ($footerContent ?? '').$sectionContent;
+            }
+            $root->removeChild($section);
+        }
 
+        $body = '';
         foreach ($root->childNodes as $child) {
             $body .= $this->renderWordBlock($child);
         }
 
         if ($body === '') {
             $body = '<w:p/>';
+        }
+
+        $documentRelationships = '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>';
+        $sectionReferences = '';
+        $contentOverrides = '';
+        $sectionEntries = [];
+        if ($headerContent !== null) {
+            $documentRelationships .= '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>';
+            $sectionReferences .= '<w:headerReference w:type="default" r:id="rId2"/>';
+            $contentOverrides .= '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>';
+            $sectionEntries['word/header1.xml'] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                .'<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                .($headerContent !== '' ? $headerContent : '<w:p/>').'</w:hdr>';
+        }
+        if ($footerContent !== null) {
+            $footerRelationshipId = $headerContent !== null ? 'rId3' : 'rId2';
+            $documentRelationships .= '<Relationship Id="'.$footerRelationshipId.'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>';
+            $sectionReferences .= '<w:footerReference w:type="default" r:id="'.$footerRelationshipId.'"/>';
+            $contentOverrides .= '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>';
+            $sectionEntries['word/footer1.xml'] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                .'<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                .($footerContent !== '' ? $footerContent : '<w:p/>').'</w:ftr>';
         }
 
         $entries = [
@@ -116,19 +163,19 @@ class ContractDocumentService
                 .'<Default Extension="xml" ContentType="application/xml"/>'
                 .'<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
                 .'<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
-                .'</Types>',
+                .$contentOverrides.'</Types>',
             '_rels/.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                 .'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
                 .'</Relationships>',
             'word/document.xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-                .'<w:body>'.$body.'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+                .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                .'<w:body>'.$body.'<w:sectPr>'.$sectionReferences.'<w:pgSz w:w="11906" w:h="16838"/>'
                 .'<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>'
                 .'</w:sectPr></w:body></w:document>',
             'word/_rels/document.xml.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                .'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+                .$documentRelationships
                 .'</Relationships>',
             'word/styles.xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -141,7 +188,7 @@ class ContractDocumentService
                 .'<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/>'
                 .'<w:pPr><w:spacing w:before="160" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>'
                 .'</w:styles>',
-        ];
+        ] + $sectionEntries;
 
         $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-');
         if ($temporaryPath === false) {
@@ -464,7 +511,10 @@ class ContractDocumentService
             .'@page{margin:2cm}body{font-family:DejaVu Sans,sans-serif;font-size:11pt;line-height:1.45;color:#1f2937}'
             .'p{margin:0 0 10pt}h1{font-size:20pt;margin:0 0 14pt}h2{font-size:16pt;margin:14pt 0 8pt}'
             .'h3{font-size:13pt;margin:12pt 0 6pt}table{width:100%;border-collapse:collapse;margin:10pt 0}'
-            .'th,td{border:1px solid #b7c8d5;padding:6pt;text-align:left}blockquote{margin:8pt 0 8pt 20pt}'
+            .'th,td{border:1px solid #b7c8d5;padding:6pt;text-align:left}th{background:#edf4f8}'
+            .'header{position:fixed;top:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
+            .'footer{position:fixed;bottom:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
+            .'blockquote{margin:8pt 0 8pt 20pt}'
             .'ul,ol{margin:0 0 10pt;padding-left:22pt}</style></head><body>'.$html.'</body></html>';
     }
 }

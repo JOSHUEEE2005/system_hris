@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Intern;
 use App\Models\OnboardingRequest;
 use App\Models\Role;
 use App\Models\User;
@@ -150,17 +151,16 @@ class RegistrationWorkflowTest extends TestCase
         Employee::create([
             'employee_no' => 'DASH-001',
             'first_name' => 'Active',
-            'last_name' => 'Intern',
+            'last_name' => 'Employee',
             'status' => 'Active',
-            'employment_type' => 'Internship',
         ]);
         Employee::create([
             'employee_no' => 'DASH-002',
             'first_name' => 'Inactive',
             'last_name' => 'Employee',
             'status' => 'Inactive',
-            'employment_type' => 'Employment',
         ]);
+        Intern::create(['intern_no' => 'DASH-INT-001', 'intern_name' => 'Current Intern']);
 
         $this->actingAs($admin)
             ->get(route('admin.dashboard'))
@@ -175,9 +175,37 @@ class RegistrationWorkflowTest extends TestCase
             ->assertViewHas('departmentCount', Department::count());
     }
 
-    public function test_super_admin_can_create_a_linked_user_and_employee_profile(): void
+    public function test_calendar_can_navigate_months_and_show_the_year_view(): void
     {
-        $department = Department::where('department_name', 'Interns')->firstOrFail();
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'calendar-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+
+        $this->actingAs($admin)
+            ->get(route('admin.calendar', ['view' => 'month', 'year' => 2026, 'month' => 11]))
+            ->assertOk()
+            ->assertSee('November, 2026')
+            ->assertSee('month=10', false)
+            ->assertSee('month=12', false);
+
+        $this->actingAs($admin)
+            ->get(route('admin.calendar', ['view' => 'year', 'year' => 2026]))
+            ->assertOk()
+            ->assertSee('Calendar of Events:')
+            ->assertSee('January')
+            ->assertSee('December')
+            ->assertSee('year=2025', false)
+            ->assertSee('year=2027', false);
+    }
+
+    public function test_super_admin_can_create_a_linked_employee_profile_with_hr_fields(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
         $admin = User::create([
             'name' => 'Super Admin',
             'email' => 'admin@example.com',
@@ -193,21 +221,27 @@ class RegistrationWorkflowTest extends TestCase
             ->assertSee('Create user');
 
         $this->actingAs($admin)->post(route('admin.users.with-employee.store'), [
-            'employee_name' => 'Jamie Rivera',
+            'profile_type' => 'employee',
+            'employee_no' => 'EMP-100',
+            'first_name' => 'Jamie',
+            'middle_name' => 'Ann',
+            'last_name' => 'Rivera',
+            'nationality' => 'Filipino',
             'email' => 'Jamie.Rivera@example.com',
             'password' => 'StrongPass123!',
             'password_confirmation' => 'StrongPass123!',
             'role_id' => Role::where('slug', 'employee')->value('id'),
             'department_id' => $department->id,
-            'designation' => 'Intern',
-            'starting_date' => '2026-11-18',
-            'period' => 'Six months',
-            'id_number' => 'EMP-100',
-            'preparer' => 'HR Team',
-            'assigned_it' => 'IT Team',
+            'position' => 'HR Analyst',
+            'hire_date' => '2026-11-18',
+            'regularized_date' => '2027-05-18',
+            'employment_status' => 'Active project based',
+            'hmo_status' => 'Upon regularization',
+            'mobile_subscription' => 'Yes 1499 subs',
+            'sss_number' => '123-45-6789',
+            'business_card' => '1',
+            'immediate_supervisor' => 'HR Manager',
             'last_date' => '2027-05-18',
-            'employment_status' => 'Intern',
-            'employment_type' => 'Internship',
         ])->assertRedirect()
             ->assertSessionHas('status', 'Employee profile and user account created.');
 
@@ -218,23 +252,27 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('Rivera', $employee->last_name);
         $this->assertSame('jamie.rivera@example.com', $employee->email);
         $this->assertSame($department->id, $employee->department_id);
-        $this->assertSame('Intern', $employee->position);
+        $this->assertSame('Jamie Ann Rivera', $employee->full_name);
+        $this->assertSame('Ann', $employee->middle_name);
+        $this->assertSame('Filipino', $employee->nationality);
+        $this->assertSame('HR Analyst', $employee->position);
         $this->assertSame('2026-11-18', $employee->hire_date->format('Y-m-d'));
-        $this->assertSame('2027-05-18', $employee->last_date->format('Y-m-d'));
-        $this->assertSame('Six months', $employee->period);
-        $this->assertSame('HR Team', $employee->preparer);
-        $this->assertSame('IT Team', $employee->assigned_it);
-        $this->assertSame('Intern', $employee->employment_status);
-        $this->assertSame('Internship', $employee->employment_type);
+        $this->assertSame('2027-05-18', $employee->regularized_date->format('Y-m-d'));
+        $this->assertSame('Active project based', $employee->employment_status);
+        $this->assertSame('Upon regularization', $employee->hmo_status);
+        $this->assertSame('Yes 1499 subs', $employee->mobile_subscription);
+        $this->assertSame('123-45-6789', $employee->sss_number);
+        $this->assertTrue($employee->business_card);
+        $this->assertSame('HR Manager', $employee->immediate_supervisor);
         $this->assertSame($employee->id, $user->employee_id);
         $this->assertSame($department->id, $user->department_id);
         $this->assertTrue(Hash::check('StrongPass123!', $user->password_hash));
         $this->assertSame('employee', $user->roles()->firstOrFail()->slug);
     }
 
-    public function test_intern_user_creation_requires_a_period_and_does_not_leave_partial_records(): void
+    public function test_intern_creation_requires_an_internship_status_and_does_not_leave_partial_records(): void
     {
-        $department = Department::where('department_name', 'Interns')->firstOrFail();
+        $department = Department::where('department_name', 'Dual Training')->firstOrFail();
         $admin = User::create([
             'name' => 'Super Admin',
             'email' => 'admin@example.com',
@@ -245,25 +283,183 @@ class RegistrationWorkflowTest extends TestCase
         $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
 
         $this->actingAs($admin)->from(route('admin.users'))->post(route('admin.users.with-employee.store'), [
-            'employee_name' => 'Taylor Park',
+            'profile_type' => 'intern',
+            'intern_no' => 'INT-100',
+            'intern_name' => 'Taylor Park',
+            'designation' => 'Marketing Intern',
             'email' => 'taylor@example.com',
             'password' => 'StrongPass123!',
             'password_confirmation' => 'StrongPass123!',
             'role_id' => Role::where('slug', 'employee')->value('id'),
             'department_id' => $department->id,
-            'designation' => 'Intern',
-            'starting_date' => '2026-11-18',
-            'id_number' => 'INT-100',
-            'preparer' => 'HR Team',
-            'assigned_it' => 'IT Team',
-            'employment_status' => 'Intern',
-            'employment_type' => 'Internship',
+            'internship_start_date' => '2026-11-18',
         ])->assertRedirect(route('admin.users'))
-            ->assertSessionHasErrors('period');
+            ->assertSessionHasErrors('internship_status');
 
         $this->get(route('admin.users'))->assertOk()->assertSee('sa-modal-error', false);
         $this->assertDatabaseMissing('users', ['email' => 'taylor@example.com']);
-        $this->assertDatabaseMissing('employees', ['employee_no' => 'INT-100']);
+        $this->assertDatabaseMissing('interns', ['intern_no' => 'INT-100']);
+    }
+
+    public function test_super_admin_can_create_a_linked_intern_profile(): void
+    {
+        $department = Department::where('department_name', 'Communications')->firstOrFail();
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'intern-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+
+        $this->actingAs($admin)->post(route('admin.users.with-employee.store'), [
+            'profile_type' => 'intern',
+            'intern_no' => 'INT-200',
+            'intern_name' => 'Jordan Lee',
+            'designation' => 'Communications Intern',
+            'email' => 'Jordan.Lee@example.com',
+            'password' => 'StrongPass123!',
+            'password_confirmation' => 'StrongPass123!',
+            'role_id' => Role::where('slug', 'employee')->value('id'),
+            'department_id' => $department->id,
+            'position' => 'Content Intern',
+            'internship_start_date' => '2026-11-18',
+            'birth_date' => '2004-01-15',
+            'gender' => 'Female',
+            'internship_status' => 'Active',
+            'university' => 'Example University',
+            'course' => 'Communications',
+            'degree_expected' => 'BA',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'Intern profile and user account created.');
+
+        $intern = Intern::where('intern_no', 'INT-200')->firstOrFail();
+        $user = User::where('email', 'jordan.lee@example.com')->firstOrFail();
+
+        $this->assertSame('Jordan Lee', $intern->intern_name);
+        $this->assertSame('Communications Intern', $intern->designation);
+        $this->assertSame('Content Intern', $intern->position);
+        $this->assertSame('Female', $intern->gender);
+        $this->assertSame($department->id, $intern->department_id);
+        $this->assertSame($user->id, $intern->user_id);
+        $this->assertNull($user->employee_id);
+        $this->assertSame($department->id, $user->department_id);
+        $this->assertSame('employee', $user->roles()->firstOrFail()->slug);
+    }
+
+    public function test_super_admin_can_edit_an_employee_profile_and_account(): void
+    {
+        $department = Department::where('department_name', 'Government Affairs')->firstOrFail();
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'edit-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+        $employee = Employee::create([
+            'employee_no' => 'EDIT-001',
+            'first_name' => 'Before',
+            'last_name' => 'Edit',
+            'email' => 'before.edit@example.com',
+            'hire_date' => '2025-01-01',
+            'department_id' => $department->id,
+            'position' => 'Assistant',
+            'employment_status' => 'Active',
+        ]);
+        $user = User::create([
+            'name' => 'Before Edit',
+            'email' => 'before.edit@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'employee_id' => $employee->id,
+            'department_id' => $department->id,
+            'status' => 'Active',
+        ]);
+        $user->roles()->attach(Role::where('slug', 'employee')->firstOrFail());
+
+        $this->actingAs($admin)->get(route('admin.users'))
+            ->assertOk()
+            ->assertSee('data-edit-user', false)
+            ->assertSee('Edit');
+
+        $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
+            'email' => 'after.edit@example.com',
+            'role_id' => Role::where('slug', 'employee')->value('id'),
+            'status' => 'Disabled',
+            'department_id' => Department::where('department_name', 'Communications')->value('id'),
+            'gender' => 'Female',
+            'position' => 'Policy Officer',
+            'employee_no' => 'EDIT-002',
+            'first_name' => 'After',
+            'middle_name' => 'Marie',
+            'last_name' => 'Updated',
+            'hire_date' => '2025-01-01',
+            'employment_status' => 'Active OIO',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'User profile updated.');
+
+        $employee->refresh();
+        $user->refresh();
+        $this->assertSame('EDIT-002', $employee->employee_no);
+        $this->assertSame('After Marie Updated', $employee->full_name);
+        $this->assertSame('Policy Officer', $employee->position);
+        $this->assertSame('after.edit@example.com', $employee->email);
+        $this->assertSame('after.edit@example.com', $user->email);
+        $this->assertSame('Disabled', $user->status);
+        $this->assertSame('Active', $employee->status);
+        $this->assertSame('employee', $user->roles()->firstOrFail()->slug);
+    }
+
+    public function test_super_admin_can_edit_an_intern_profile(): void
+    {
+        $department = Department::where('department_name', 'Trade Promotions')->firstOrFail();
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'edit-intern-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+        $user = User::create([
+            'name' => 'Casey Intern',
+            'email' => 'casey@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'department_id' => $department->id,
+            'status' => 'Active',
+        ]);
+        $user->roles()->attach(Role::where('slug', 'employee')->firstOrFail());
+        $intern = Intern::create([
+            'intern_no' => 'EDIT-INT-001',
+            'intern_name' => 'Casey Intern',
+            'email' => 'casey@example.com',
+            'department_id' => $department->id,
+            'user_id' => $user->id,
+        ]);
+
+        $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
+            'email' => 'casey.updated@example.com',
+            'role_id' => Role::where('slug', 'employee')->value('id'),
+            'status' => 'Active',
+            'department_id' => $department->id,
+            'position' => 'Trade Research Intern',
+            'intern_no' => 'EDIT-INT-002',
+            'intern_name' => 'Casey Updated',
+            'designation' => 'Research Intern',
+            'internship_start_date' => '2026-01-01',
+            'internship_status' => 'Finished',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'User profile updated.');
+
+        $intern->refresh();
+        $user->refresh();
+        $this->assertSame('EDIT-INT-002', $intern->intern_no);
+        $this->assertSame('Casey Updated', $intern->intern_name);
+        $this->assertSame('Research Intern', $intern->designation);
+        $this->assertSame('casey.updated@example.com', $intern->email);
+        $this->assertSame('casey.updated@example.com', $user->email);
     }
 
     public function test_hr_approval_creates_employee_and_activates_registered_user(): void

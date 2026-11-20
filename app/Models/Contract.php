@@ -16,6 +16,7 @@ class Contract extends Model
         'file_size',
         'recipient_type',
         'department_id',
+        'folder_id',
         'created_by',
         'sent_at',
         'content_html',
@@ -29,6 +30,11 @@ class Contract extends Model
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
+    }
+
+    public function folder(): BelongsTo
+    {
+        return $this->belongsTo(ContractFolder::class, 'folder_id');
     }
 
     public function createdBy(): BelongsTo

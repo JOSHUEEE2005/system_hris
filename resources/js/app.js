@@ -76,6 +76,8 @@ const contractEditorPanel = document.getElementById('contract-editor-panel');
 const contractEditor = document.getElementById('contract-editor');
 const contractContentHtml = document.getElementById('contract-content-html');
 const contractEditorBlock = document.getElementById('contract-editor-block');
+const contractTableRows = document.getElementById('contract-table-rows');
+const contractTableColumns = document.getElementById('contract-table-columns');
 const contractPlaceholder = document.getElementById('contract-placeholder');
 const contractSubmitButton = document.getElementById('contract-submit-button');
 const contractMethodInput = document.getElementById('contract-method');
@@ -87,6 +89,7 @@ const contractModeInputs = [...document.querySelectorAll('input[name="recipient_
 const contractDepartmentChoice = document.getElementById('contract-department-choice');
 const contractIndividualChoice = document.getElementById('contract-individual-choice');
 const contractDepartmentSelect = contractDepartmentChoice?.querySelector('select');
+const contractFolderSelect = document.getElementById('contract-folder');
 const contractRecipientCheckboxes = [...document.querySelectorAll('input[name="recipient_ids[]"]')];
 const contractRecipientSearch = document.getElementById('contract-recipient-search');
 const contractRecipientOptions = [...document.querySelectorAll('[data-contract-recipient-option]')];
@@ -219,6 +222,9 @@ const setContractCreateMode = () => {
     if (contractDepartmentSelect instanceof HTMLSelectElement) {
         contractDepartmentSelect.value = '';
     }
+    if (contractFolderSelect instanceof HTMLSelectElement) {
+        contractFolderSelect.value = '';
+    }
     contractModeInputs.forEach((input) => { input.checked = input.value === 'department'; });
     contractRecipientCheckboxes.forEach((input) => { input.checked = false; });
     if (contractRecipientSearch instanceof HTMLInputElement) contractRecipientSearch.value = '';
@@ -248,6 +254,9 @@ const setContractEditMode = (button, preserveValues = false) => {
         if (contractTitleInput instanceof HTMLInputElement) contractTitleInput.value = button.dataset.title;
         if (contractDepartmentSelect instanceof HTMLSelectElement) {
             contractDepartmentSelect.value = button.dataset.departmentId;
+        }
+        if (contractFolderSelect instanceof HTMLSelectElement) {
+            contractFolderSelect.value = button.dataset.folderId || '';
         }
         contractModeInputs.forEach((input) => { input.checked = input.value === button.dataset.recipientType; });
         const selectedIds = new Set(button.dataset.recipientIds.split(',').filter(Boolean));
@@ -331,6 +340,64 @@ contractPlaceholder?.addEventListener('change', () => {
 contractEditor?.addEventListener('keyup', rememberContractEditorRange);
 contractEditor?.addEventListener('mouseup', rememberContractEditorRange);
 contractPlaceholder?.addEventListener('focus', rememberContractEditorRange);
+contractTableRows?.addEventListener('focus', rememberContractEditorRange);
+contractTableColumns?.addEventListener('focus', rememberContractEditorRange);
+
+contractModal?.querySelectorAll('[data-contract-insert-table], [data-contract-insert-section]').forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => {
+        if (!(contractEditor instanceof HTMLElement)) return;
+        restoreContractEditorRange();
+
+        if (button.hasAttribute('data-contract-insert-table')) {
+            const readSize = (input) => {
+                const parsed = Number.parseInt(input?.value || '', 10);
+                return Number.isFinite(parsed) ? Math.min(10, Math.max(1, parsed)) : 3;
+            };
+            const rows = readSize(contractTableRows);
+            const columns = readSize(contractTableColumns);
+            const headerCells = Array.from({ length: columns }, (_, index) => `<th>Header ${index + 1}</th>`).join('');
+            const bodyRows = Array.from({ length: rows - 1 }, () => (
+                `<tr>${'<td><br></td>'.repeat(columns)}</tr>`
+            )).join('');
+            const table = `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table><p><br></p>`;
+            document.execCommand('insertHTML', false, table);
+        } else {
+            const sectionName = button.dataset.contractInsertSection;
+            if (sectionName !== 'header' && sectionName !== 'footer') return;
+            const existing = [...contractEditor.children].find((child) => child.tagName.toLowerCase() === sectionName);
+            if (existing) {
+                const paragraph = existing.querySelector('p') || existing;
+                const range = document.createRange();
+                range.selectNodeContents(paragraph);
+                range.collapse(false);
+                const selection = window.getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+            } else {
+                const section = document.createElement(sectionName);
+                const paragraph = document.createElement('p');
+                paragraph.append(document.createElement('br'));
+                section.append(paragraph);
+                if (sectionName === 'header') {
+                    contractEditor.insertBefore(section, contractEditor.firstChild);
+                } else {
+                    contractEditor.append(section);
+                }
+                const range = document.createRange();
+                range.selectNodeContents(paragraph);
+                range.collapse(false);
+                const selection = window.getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+            }
+        }
+
+        rememberContractEditorRange();
+        syncContractEditor();
+    });
+});
+contractEditor?.addEventListener('input', syncContractEditor);
 
 if (contractModal instanceof HTMLElement && !contractModal.hidden) {
     const recordId = contractRecordId instanceof HTMLInputElement ? contractRecordId.value : '';
@@ -372,21 +439,38 @@ contractDeleteForm?.addEventListener('submit', (event) => {
 const contractSearch = document.getElementById('contract-search');
 const contractCards = [...document.querySelectorAll('[data-contract-card]')];
 const noContractCardsMatch = document.getElementById('contract-search-empty');
+const contractFolderFilters = [...document.querySelectorAll('[data-contract-folder-filter]')];
+let selectedContractFolder = 'all';
 
-if (contractSearch instanceof HTMLInputElement && noContractCardsMatch instanceof HTMLElement) {
-    contractSearch.addEventListener('input', () => {
-        const query = contractSearch.value.trim().toLowerCase();
-        let visibleCount = 0;
+const filterContractCards = () => {
+    const query = contractSearch instanceof HTMLInputElement ? contractSearch.value.trim().toLowerCase() : '';
+    let visibleCount = 0;
 
-        contractCards.forEach((card) => {
-            const matches = card.dataset.search.includes(query);
-            card.hidden = !matches;
-            if (matches) visibleCount++;
-        });
-
-        noContractCardsMatch.hidden = visibleCount !== 0;
+    contractCards.forEach((card) => {
+        const matchesSearch = card.dataset.search.includes(query);
+        const matchesFolder = selectedContractFolder === 'all'
+            || (selectedContractFolder === 'unfiled' && !card.dataset.folderId)
+            || card.dataset.folderId === selectedContractFolder;
+        card.hidden = !matchesSearch || !matchesFolder;
+        if (!card.hidden) visibleCount++;
     });
-}
+
+    if (noContractCardsMatch instanceof HTMLElement) {
+        noContractCardsMatch.hidden = contractCards.length === 0 || visibleCount !== 0;
+    }
+};
+
+contractSearch?.addEventListener('input', filterContractCards);
+contractFolderFilters.forEach((button) => {
+    button.addEventListener('click', () => {
+        selectedContractFolder = button.dataset.contractFolderFilter || 'all';
+        contractFolderFilters.forEach((filter) => {
+            filter.setAttribute('aria-pressed', String(filter === button));
+        });
+        filterContractCards();
+    });
+});
+filterContractCards();
 
 const headerPopoverToggles = [...document.querySelectorAll('[data-header-popover-toggle]')];
 const headerPopovers = headerPopoverToggles

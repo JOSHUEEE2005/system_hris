@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AuditLog;
 use App\Models\Contract;
+use App\Models\ContractFolder;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Models\Role;
@@ -118,6 +119,55 @@ class ContractsWorkflowTest extends TestCase
         ]);
     }
 
+    public function test_hr_folders_are_shared_and_contracts_can_be_filed_or_unfiled(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $anotherHrManager = $this->createUser('Another HR Manager', 'hr2@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+
+        $this->actingAs($hr)->post(route('admin.contracts.folders.store'), [
+            'name' => '2026 Agreements',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'Folder created successfully.');
+
+        $folder = ContractFolder::where('name', '2026 Agreements')->firstOrFail();
+        $this->assertSame($hr->id, $folder->created_by);
+
+        $this->actingAs($hr)->post(route('admin.contracts.store'), [
+            'title' => 'Employment agreement',
+            'file' => UploadedFile::fake()->create('agreement.docx', 12, 'application/octet-stream'),
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id],
+            'folder_id' => $folder->id,
+        ])->assertRedirect();
+
+        $contract = Contract::with('folder')->firstOrFail();
+        $this->assertSame($folder->id, $contract->folder_id);
+        $this->assertSame('2026 Agreements', $contract->folder->name);
+
+        $this->actingAs($anotherHrManager)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('2026 Agreements')
+            ->assertSee('data-contract-folder-filter="'.$folder->id.'"', false);
+        $this->actingAs($recipient)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Employment agreement')
+            ->assertDontSee('2026 Agreements');
+        $this->actingAs($recipient)->post(route('admin.contracts.folders.store'), [
+            'name' => 'Private folder',
+        ])->assertForbidden();
+
+        $this->actingAs($hr)->put(route('admin.contracts.update', $contract), [
+            'title' => 'Employment agreement',
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id],
+            'folder_id' => '',
+        ])->assertRedirect();
+
+        $this->assertNull($contract->fresh()->folder_id);
+    }
+
     public function test_employees_from_each_department_only_see_home_and_their_assigned_contracts(): void
     {
         $departmentNames = [
@@ -188,10 +238,16 @@ class ContractsWorkflowTest extends TestCase
         ]);
         $recipient->update(['employee_id' => $employee->id]);
 
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Insert table')
+            ->assertSee('Add header')
+            ->assertSee('Add footer');
+
         $this->actingAs($hr)->post(route('admin.contracts.store'), [
             'contract_source' => 'editor',
             'title' => 'Employment agreement',
-            'content_html' => '<h1>Hi [User Full Name]</h1><p>[Work Email] · [Department] · [Employee ID] · [Designation] · [Role] · [Status]</p><script>window.alert(1)</script>',
+            'content_html' => '<header><p>Confidential: [Department]</p></header><h1>Hi [User Full Name]</h1><table><thead><tr><th>Employee</th><th>ID</th></tr></thead><tbody><tr><td>[User Full Name]</td><td>[Employee ID]</td></tr></tbody></table><p>[Work Email] · [Department] · [Designation] · [Role] · [Status]</p><footer><p>Contact: [Work Email]</p></footer><script>window.alert(1)</script>',
             'recipient_type' => 'individual',
             'recipient_ids' => [$recipient->id],
         ])->assertRedirect()
@@ -200,8 +256,12 @@ class ContractsWorkflowTest extends TestCase
         $contract = Contract::with('recipients')->firstOrFail();
         $this->assertNotNull($contract->content_html);
         $this->assertStringNotContainsString('<script', $contract->content_html);
+        $this->assertStringContainsString('<header>', $contract->content_html);
+        $this->assertStringContainsString('<table>', $contract->content_html);
+        $this->assertStringContainsString('<footer>', $contract->content_html);
         Storage::disk('local')->assertExists($contract->storage_path);
         $personalized = app(ContractDocumentService::class)->personalizeHtml($contract->content_html, $recipient);
+        $this->assertStringContainsString('Confidential: Chamber Services', $personalized);
         $this->assertStringContainsString('Hi Jamie Rivera', $personalized);
         $this->assertStringContainsString('jamie@example.com', $personalized);
         $this->assertStringContainsString('Chamber Services', $personalized);
@@ -209,6 +269,32 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('HR Analyst', $personalized);
         $this->assertStringContainsString((string) Role::where('slug', 'employee')->value('name'), $personalized);
         $this->assertStringContainsString('Active', $personalized);
+        $docxContents = app(ContractDocumentService::class)->renderDocx($personalized);
+        $docxPath = tempnam(sys_get_temp_dir(), 'contract-export-test-');
+        if ($docxPath === false) {
+            $this->fail('Unable to allocate a temporary Word document.');
+        }
+        try {
+            $this->assertNotFalse(file_put_contents($docxPath, $docxContents));
+            $archive = new \ZipArchive;
+            $this->assertTrue($archive->open($docxPath) === true);
+            $headerXml = (string) $archive->getFromName('word/header1.xml');
+            $footerXml = (string) $archive->getFromName('word/footer1.xml');
+            $documentXml = (string) $archive->getFromName('word/document.xml');
+            $relationshipsXml = (string) $archive->getFromName('word/_rels/document.xml.rels');
+            $archive->close();
+            $this->assertStringContainsString('Confidential: Chamber Services', $headerXml);
+            $this->assertStringContainsString('Contact: jamie@example.com', $footerXml);
+            $this->assertStringContainsString('<w:tbl>', $documentXml);
+            $this->assertStringContainsString('/header', $relationshipsXml);
+            $this->assertStringContainsString('/footer', $relationshipsXml);
+            foreach ([$headerXml, $footerXml, $documentXml, $relationshipsXml] as $xmlContents) {
+                $xml = new \DOMDocument;
+                $this->assertTrue($xml->loadXML($xmlContents));
+            }
+        } finally {
+            unlink($docxPath);
+        }
 
         $this->actingAs($recipient)
             ->get(route('admin.contracts.download', [$contract, 'format' => 'pdf']))

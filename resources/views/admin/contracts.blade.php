@@ -34,8 +34,24 @@
         @if ($canManageContracts)
             <div class="contract-toolbar">
                 <label class="contract-search"><span aria-hidden="true">⌕</span><input id="contract-search" type="search" placeholder="Search contract or file name" aria-label="Search contracts"></label>
-                <span class="contract-hint">Files are stored privately and only shown to assigned recipients.</span>
+                <form class="contract-folder-create" method="POST" action="{{ route('admin.contracts.folders.store') }}">
+                    @csrf
+                    <label class="sr-only" for="contract-folder-name">New folder name</label>
+                    <input id="contract-folder-name" name="name" value="{{ old('name') }}" maxlength="100" placeholder="New folder name" required>
+                    <button class="contract-action-secondary" type="submit">＋ Create folder</button>
+                </form>
             </div>
+            @if ($errors->folder->any())
+                <p class="contract-folder-error" role="alert">{{ $errors->folder->first('name') }}</p>
+            @endif
+            <nav class="contract-folder-filters" aria-label="Filter contracts by folder">
+                <button class="contract-folder-filter" type="button" data-contract-folder-filter="all" aria-pressed="true">All contracts</button>
+                <button class="contract-folder-filter" type="button" data-contract-folder-filter="unfiled" aria-pressed="false">Unfiled</button>
+                @foreach ($folders as $folder)
+                    <button class="contract-folder-filter" type="button" data-contract-folder-filter="{{ $folder->id }}" aria-pressed="false">{{ $folder->name }}</button>
+                @endforeach
+            </nav>
+            <p class="contract-hint">Folders are shared with HR managers. Files remain private and visible only to assigned recipients.</p>
         @endif
 
         @if ($contracts->isEmpty())
@@ -58,6 +74,7 @@
                     <article
                         class="contract-card"
                         data-contract-card
+                        data-folder-id="{{ $contract->folder_id ?? '' }}"
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
                     >
                         <div class="contract-preview">
@@ -88,6 +105,9 @@
                                     <span class="contract-status-badge {{ strtolower($recipient->status) }}">{{ $recipient->status }}</span>
                                 @endif
                             </div>
+                            @if ($canManageContracts && $contract->folder)
+                                <span class="contract-folder-label">{{ $contract->folder->name }}</span>
+                            @endif
                             <div class="contract-card-meta">
                                 <span>{{ $contract->sent_at?->format('M j, Y') ?? $contract->created_at?->format('M j, Y') }}</span>
                                 <span>{{ number_format($contract->file_size / 1024, 0) }} KB</span>
@@ -129,6 +149,7 @@
                                         data-content-html="{{ $contract->content_html }}"
                                         data-department-id="{{ $contract->department_id ?? '' }}"
                                         data-recipient-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
+                                        data-folder-id="{{ $contract->folder_id ?? '' }}"
                                     >Edit</button>
                                 @endif
                                 @if (! $canManageContracts && $recipient->status === 'Pending')
@@ -144,9 +165,9 @@
                     </article>
                 @endforeach
             </div>
-            @if ($canManageContracts)
-                <p id="contract-search-empty" class="contract-search-empty" hidden>No contracts match your search.</p>
-            @endif
+        @endif
+        @if ($canManageContracts)
+            <p id="contract-search-empty" class="contract-search-empty" hidden>No contracts match your search or folder selection.</p>
         @endif
     </main>
 
@@ -177,6 +198,15 @@
                         <label for="contract-title">Contract title <span>*</span></label>
                         <input id="contract-title" name="title" value="{{ old('title') }}" maxlength="200" placeholder="e.g. Employment agreement — 2026" required>
                     </div>
+                    <div class="contract-form-field">
+                        <label for="contract-folder">Folder</label>
+                        <select id="contract-folder" name="folder_id">
+                            <option value="">No folder</option>
+                            @foreach ($folders as $folder)
+                                <option value="{{ $folder->id }}" @selected(old('folder_id') == $folder->id)>{{ $folder->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
                     <fieldset class="contract-document-mode">
                         <legend>Contract content</legend>
                         <label><input type="radio" name="contract_document_mode" value="upload" @checked(old('contract_source', 'upload') === 'upload')><span>Upload file</span></label>
@@ -196,6 +226,11 @@
                             <button type="button" data-contract-command="underline" aria-label="Underline"><u>U</u></button>
                             <button type="button" data-contract-command="insertUnorderedList" aria-label="Bulleted list">• List</button>
                             <button type="button" data-contract-command="insertOrderedList" aria-label="Numbered list">1. List</button>
+                            <label class="contract-table-size"><span>Rows</span><input id="contract-table-rows" type="number" min="1" max="10" value="3"></label>
+                            <label class="contract-table-size"><span>Columns</span><input id="contract-table-columns" type="number" min="1" max="10" value="3"></label>
+                            <button type="button" data-contract-insert-table>Insert table</button>
+                            <button type="button" data-contract-insert-section="header">Add header</button>
+                            <button type="button" data-contract-insert-section="footer">Add footer</button>
                             <select id="contract-editor-block" aria-label="Text style">
                                 <option value="p">Paragraph</option>
                                 <option value="h1">Heading 1</option>
@@ -242,7 +277,9 @@
                                 <div class="contract-recipient-list">
                                     @foreach ($recipients as $recipient)
                                         @php
-                                            $recipientDepartment = $recipient->department?->department_name ?? $recipient->employee?->department?->department_name;
+                                            $recipientDepartment = $recipient->department?->department_name
+                                                ?? $recipient->employee?->department?->department_name
+                                                ?? $recipient->intern?->department?->department_name;
                                             $oldRecipientIds = (array) old('recipient_ids', []);
                                         @endphp
                                         <label data-contract-recipient-option data-search="{{ strtolower($recipient->name.' '.$recipient->email.' '.($recipientDepartment ?? '')) }}">

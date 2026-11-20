@@ -63,6 +63,11 @@ class User extends Authenticatable
         return $this->belongsTo(Employee::class);
     }
 
+    public function intern(): HasOne
+    {
+        return $this->hasOne(Intern::class);
+    }
+
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);

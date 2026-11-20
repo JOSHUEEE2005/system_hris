@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
 use App\Models\Contract;
+use App\Models\ContractFolder;
 use App\Models\ContractRecipient;
 use App\Models\Department;
 use App\Models\User;
@@ -43,7 +44,7 @@ class ContractController extends Controller
             $contracts->withCount([
                 'recipients',
                 'recipients as pending_recipients_count' => fn (Builder $query) => $query->where('status', 'Pending'),
-            ])->with('recipients.user.department', 'recipients.user.employee.department');
+            ])->with(['folder', 'recipients.user.department', 'recipients.user.employee.department', 'recipients.user.intern.department']);
         } else {
             $contracts->whereHas('recipients', fn (Builder $query) => $query->where('user_id', $viewer->id))
                 ->with(['recipients' => fn ($query) => $query->where('user_id', $viewer->id)]);
@@ -54,8 +55,11 @@ class ContractController extends Controller
             'departments' => $canManageContracts
                 ? Department::orderBy('department_name')->get()
                 : collect(),
+            'folders' => $canManageContracts
+                ? ContractFolder::orderBy('name')->get()
+                : collect(),
             'recipients' => $canManageContracts
-                ? $this->recipientCandidateQuery()->with(['department', 'employee.department'])->orderBy('name')->get()
+                ? $this->recipientCandidateQuery()->with(['department', 'employee.department', 'intern.department'])->orderBy('name')->get()
                 : collect(),
             'canManageContracts' => $canManageContracts,
             'oldContractContentHtml' => $request->session()->hasOldInput('content_html')
@@ -64,9 +68,27 @@ class ContractController extends Controller
         ]);
     }
 
+    public function storeFolder(Request $request): RedirectResponse
+    {
+        $data = $request->validateWithBag('folder', [
+            'name' => ['required', 'string', 'max:100', Rule::unique('contract_folders', 'name')],
+        ]);
+
+        ContractFolder::create([
+            'name' => trim($data['name']),
+            'created_by' => $request->user()->id,
+        ]);
+
+        return back()->with('status', 'Folder created successfully.');
+    }
+
     public function store(Request $request, ContractDocumentService $documents): RedirectResponse
     {
         $sourceType = $request->input('contract_source', 'upload');
+        if ($request->input('folder_id') === '') {
+            $request->merge(['folder_id' => null]);
+        }
+
         $data = $request->validate([
             'contract_source' => ['sometimes', Rule::in(['upload', 'editor'])],
             'title' => ['required', 'string', 'max:200'],
@@ -74,6 +96,7 @@ class ContractController extends Controller
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
+            'folder_id' => ['nullable', 'integer', 'exists:contract_folders,id'],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
             'recipient_ids.*' => [
                 'required',
@@ -121,6 +144,7 @@ class ContractController extends Controller
                     'file_size' => $fileSize,
                     'recipient_type' => $data['recipient_type'],
                     'department_id' => $data['recipient_type'] === 'department' ? $data['department_id'] : null,
+                    'folder_id' => $data['folder_id'] ?? null,
                     'created_by' => $request->user()->id,
                     'sent_at' => now(),
                     'content_html' => $contentHtml,
@@ -155,6 +179,10 @@ class ContractController extends Controller
     {
         $sourceType = $request->input('contract_source', $contract->content_html !== null ? 'editor' : 'upload');
         $requiresUpload = $sourceType === 'upload' && $contract->content_html !== null;
+        if ($request->input('folder_id') === '') {
+            $request->merge(['folder_id' => null]);
+        }
+
         $data = $request->validate([
             'contract_source' => ['sometimes', Rule::in(['upload', 'editor'])],
             'title' => ['required', 'string', 'max:200'],
@@ -162,6 +190,7 @@ class ContractController extends Controller
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
+            'folder_id' => ['nullable', 'integer', 'exists:contract_folders,id'],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
             'recipient_ids.*' => [
                 'required',
@@ -234,6 +263,7 @@ class ContractController extends Controller
                 $oldFilename = $lockedContract->original_filename;
                 $oldRecipientType = $lockedContract->recipient_type;
                 $oldDepartmentId = $lockedContract->department_id;
+                $oldFolderId = $lockedContract->folder_id;
                 $departmentId = $data['recipient_type'] === 'department' ? $data['department_id'] : null;
 
                 $lockedContract->update([
@@ -244,6 +274,7 @@ class ContractController extends Controller
                     'file_size' => $fileSize,
                     'recipient_type' => $data['recipient_type'],
                     'department_id' => $departmentId,
+                    'folder_id' => $data['folder_id'] ?? null,
                     'content_html' => $contentHtml,
                 ]);
 
@@ -281,6 +312,10 @@ class ContractController extends Controller
                     'department_id' => [
                         'from' => $oldDepartmentId,
                         'to' => $departmentId,
+                    ],
+                    'folder_id' => [
+                        'from' => $oldFolderId,
+                        'to' => $data['folder_id'] ?? null,
                     ],
                     'recipient_ids' => [
                         'added' => array_values(array_diff($recipientIds, $oldRecipientIds)),
@@ -428,7 +463,10 @@ class ContractController extends Controller
     {
         $query = User::query()
             ->where('status', 'Active')
-            ->where(fn (Builder $query) => $query->whereNotNull('employee_id')->orWhereNotNull('department_id'));
+            ->where(fn (Builder $query) => $query
+                ->whereNotNull('employee_id')
+                ->orWhereNotNull('department_id')
+                ->orWhereHas('intern'));
 
         if ($departmentId !== null) {
             $query->where(function (Builder $query) use ($departmentId): void {
