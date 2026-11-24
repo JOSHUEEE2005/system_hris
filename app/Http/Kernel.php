@@ -13,12 +13,12 @@ use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
-use Illuminate\Http\Middleware\TrustProxies;
+use App\Http\Middleware\TrustRailwayProxies;
 
 class Kernel extends HttpKernel
 {
     protected $middleware = [
-        TrustProxies::class,
+        TrustRailwayProxies::class,
     ];
 
     protected $middlewareGroups = [
