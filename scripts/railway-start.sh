@@ -8,6 +8,11 @@ if [ -z "${APP_URL:-}" ] || [ "$APP_URL" = "http://localhost" ]; then
     fi
 fi
 
+if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+    export APP_URL="${APP_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}"
+    export ASSET_URL="${ASSET_URL:-${APP_URL}}"
+fi
+
 rm -f public/hot
 
 php artisan config:clear
