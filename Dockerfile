@@ -13,9 +13,11 @@ RUN apt-get update \
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /app
+ARG RAILWAY_DEPLOYMENT_CACHE_BUST=20261124-1
 COPY . .
 
-RUN python3 -m pip install --break-system-packages -r requirements-pdf.txt \
+RUN echo "Railway deployment cache bust: ${RAILWAY_DEPLOYMENT_CACHE_BUST}" \
+    && python3 -m pip install --break-system-packages -r requirements-pdf.txt \
     && composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction \
     && npm ci \
     && npm run build \
