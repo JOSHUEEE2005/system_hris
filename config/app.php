@@ -1,5 +1,17 @@
 <?php
 
+$appUrl = trim((string) env('APP_URL', 'http://localhost'));
+$assetUrl = trim((string) env('ASSET_URL', ''));
+$railwayDomain = trim((string) getenv('RAILWAY_PUBLIC_DOMAIN'));
+
+if ($railwayDomain !== '') {
+    $appUrl = 'https://'.$railwayDomain;
+    $assetUrl = $assetUrl !== '' ? $assetUrl : $appUrl;
+}
+
+$appUrl = preg_replace('#^http://#i', 'https://', $appUrl);
+$assetUrl = $assetUrl !== '' ? preg_replace('#^http://#i', 'https://', $assetUrl) : null;
+
 return [
 
     /*
@@ -52,9 +64,9 @@ return [
     |
     */
 
-    'url' => env('APP_URL', 'http://localhost'),
+    'url' => $appUrl,
 
-    'asset_url' => env('ASSET_URL'),
+    'asset_url' => $assetUrl,
 
     /*
     |--------------------------------------------------------------------------
