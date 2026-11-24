@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -186,14 +187,44 @@ return new class extends Migration
             }
         });
 
-        if (! collect(Schema::getForeignKeys('users'))->contains(
-            fn (array $foreignKey): bool => in_array('employee_id', $foreignKey['columns'], true),
-        )) {
+        if (! $this->usersEmployeeForeignKeyExists()) {
             Schema::table('users', function (Blueprint $table): void {
                 $table->foreign('employee_id')->references('id')->on('employees')
                     ->restrictOnDelete()->cascadeOnUpdate();
             });
         }
+    }
+
+    private function usersEmployeeForeignKeyExists(): bool
+    {
+        if (DB::getDriverName() === 'mysql') {
+            $foreignKeys = DB::select(
+                "SELECT tc.constraint_name
+                 FROM information_schema.table_constraints tc
+                 JOIN information_schema.key_column_usage kcu
+                   ON kcu.constraint_name = tc.constraint_name
+                  AND kcu.table_schema = tc.table_schema
+                  AND kcu.table_name = tc.table_name
+                 WHERE tc.table_schema = DATABASE()
+                   AND tc.table_name = 'users'
+                   AND tc.constraint_type = 'FOREIGN KEY'
+                   AND kcu.column_name = 'employee_id'"
+            );
+
+            return count($foreignKeys) > 0;
+        }
+
+        if (DB::getDriverName() === 'sqlite') {
+            $foreignKeys = DB::select("PRAGMA foreign_key_list('users')");
+
+            foreach ($foreignKeys as $foreignKey) {
+                if (($foreignKey->from ?? null) === 'employee_id') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function ensureTimestamps(string $tableName): void
