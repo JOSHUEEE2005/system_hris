@@ -1038,40 +1038,95 @@ PY;
 
     private function renderWordTable(DOMElement $table): string
     {
-        $rows = '';
+        $rows = [];
         foreach ($table->childNodes as $section) {
             if (! $section instanceof DOMElement) {
                 continue;
             }
             if (strtolower($section->tagName) === 'tr') {
-                $rows .= $this->renderWordRow($section);
+                $rows[] = $section;
 
                 continue;
             }
             foreach ($section->childNodes as $row) {
                 if ($row instanceof DOMElement && strtolower($row->tagName) === 'tr') {
-                    $rows .= $this->renderWordRow($row);
+                    $rows[] = $row;
                 }
             }
         }
 
-        return '<w:tbl><w:tblPr><w:tblBorders>'
+        $columnCount = 1;
+        foreach ($rows as $row) {
+            $rowColumnCount = 0;
+            foreach ($row->childNodes as $cell) {
+                if ($cell instanceof DOMElement && in_array(strtolower($cell->tagName), ['td', 'th'], true)) {
+                    $rowColumnCount += max(1, (int) $cell->getAttribute('colspan'));
+                }
+            }
+            $columnCount = max($columnCount, $rowColumnCount);
+        }
+
+        $gridColumns = '';
+        $columnWidths = [];
+        foreach ($table->getElementsByTagName('col') as $col) {
+            if (! $col instanceof DOMElement) {
+                continue;
+            }
+            if (preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $col->getAttribute('style'), $widthMatch)) {
+                $columnWidths[] = (float) $widthMatch[1];
+            }
+        }
+        $widthTotal = array_sum($columnWidths);
+        for ($column = 0; $column < $columnCount; $column++) {
+            if (count($columnWidths) === $columnCount && $widthTotal > 0) {
+                $columnWidth = (int) round(($columnWidths[$column] / $widthTotal) * 9000);
+            } else {
+                $columnWidth = (int) floor(9000 / $columnCount);
+            }
+            $gridColumns .= '<w:gridCol w:w="'.$columnWidth.'"/>';
+        }
+
+        $wordRows = '';
+        $occupied = [];
+        foreach ($rows as $rowIndex => $row) {
+            $wordRows .= $this->renderWordRow($row, $rowIndex, $columnCount, $occupied);
+        }
+
+        return '<w:tbl><w:tblPr><w:tblW w:w="100" w:type="pct"/><w:tblLayout w:type="fixed"/><w:tblBorders>'
             .'<w:top w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:left w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:bottom w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:right w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:insideH w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:insideV w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'</w:tblBorders></w:tblPr>'.$rows.'</w:tbl>';
+            .'</w:tblBorders></w:tblPr><w:tblGrid>'.$gridColumns.'</w:tblGrid>'.$wordRows.'</w:tbl>';
     }
 
-    private function renderWordRow(DOMElement $row): string
+    private function renderWordRow(DOMElement $row, int $rowIndex, int $columnCount, array &$occupied): string
     {
-        $cells = '';
+        $sourceCells = [];
         foreach ($row->childNodes as $cell) {
-            if (! $cell instanceof DOMElement || ! in_array(strtolower($cell->tagName), ['td', 'th'], true)) {
+            if ($cell instanceof DOMElement && in_array(strtolower($cell->tagName), ['td', 'th'], true)) {
+                $sourceCells[] = $cell;
+            }
+        }
+
+        $cells = '';
+        $sourceIndex = 0;
+        $column = 0;
+        while ($column < $columnCount) {
+            if (isset($occupied[$rowIndex][$column])) {
+                $cells .= '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/><w:vMerge/></w:tcPr><w:p/></w:tc>';
+                $column++;
                 continue;
             }
+            if (! isset($sourceCells[$sourceIndex])) {
+                $cells .= '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>';
+                $column++;
+                continue;
+            }
+
+            $cell = $sourceCells[$sourceIndex++];
             $content = '';
             foreach ($cell->childNodes as $child) {
                 $content .= $this->renderWordBlock($child);
@@ -1080,9 +1135,20 @@ PY;
                 $content = '<w:p/>';
             }
 
-            $cells .= '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>'
-                .($cell->hasAttribute('colspan') ? '<w:gridSpan w:val="'.$cell->getAttribute('colspan').'"/>' : '')
-                .'</w:tcPr>'.$content.'</w:tc>';
+            $colspan = max(1, (int) $cell->getAttribute('colspan'));
+            $rowspan = max(1, (int) $cell->getAttribute('rowspan'));
+            $cellProperties = '<w:tcW w:w="0" w:type="auto"/>'
+                .($colspan > 1 ? '<w:gridSpan w:val="'.$colspan.'"/>' : '')
+                .($rowspan > 1 ? '<w:vMerge w:val="restart"/>' : '');
+
+            $cells .= '<w:tc><w:tcPr>'.$cellProperties.'</w:tcPr>'.$content.'</w:tc>';
+
+            for ($spanRow = $rowIndex + 1; $spanRow < $rowIndex + $rowspan; $spanRow++) {
+                for ($spanColumn = $column; $spanColumn < $column + $colspan; $spanColumn++) {
+                    $occupied[$spanRow][$spanColumn] = true;
+                }
+            }
+            $column += $colspan;
         }
 
         return '<w:tr>'.$cells.'</w:tr>';

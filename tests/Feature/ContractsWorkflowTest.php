@@ -50,6 +50,32 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringStartsWith('%PDF-', $pdf);
     }
 
+    public function test_word_export_preserves_colspan_and_rowspan(): void
+    {
+        $html = '<table><tbody>'
+            .'<tr><td rowspan="2" colspan="2">Merged</td><td>Right</td></tr>'
+            .'<tr><td>Below</td></tr>'
+            .'</tbody></table>';
+
+        $docx = app(ContractDocumentService::class)->renderDocx($html);
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-test-');
+        file_put_contents($temporaryPath, $docx);
+
+        $archive = new \ZipArchive();
+        $this->assertTrue($archive->open($temporaryPath) === true);
+        $documentXml = $archive->getFromName('word/document.xml');
+        $archive->close();
+        @unlink($temporaryPath);
+
+        $this->assertIsString($documentXml);
+        $this->assertStringContainsString('<w:gridSpan w:val="2"/>', $documentXml);
+        $this->assertStringContainsString('<w:vMerge w:val="restart"/>', $documentXml);
+        $this->assertGreaterThanOrEqual(
+            2,
+            substr_count($documentXml, '<w:vMerge'),
+        );
+    }
+
     public function test_hr_can_send_a_private_file_to_selected_employees_and_recipients_can_acknowledge_it(): void
     {
         $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
