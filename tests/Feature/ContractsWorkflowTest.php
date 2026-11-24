@@ -70,6 +70,7 @@ class ContractsWorkflowTest extends TestCase
         $this->assertIsString($documentXml);
         $this->assertStringContainsString('<w:gridSpan w:val="2"/>', $documentXml);
         $this->assertStringContainsString('<w:vMerge w:val="restart"/>', $documentXml);
+        $this->assertStringContainsString('w:type="dxa"', $documentXml);
         $this->assertGreaterThanOrEqual(
             2,
             substr_count($documentXml, '<w:vMerge'),

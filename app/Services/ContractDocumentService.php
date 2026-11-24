@@ -1077,19 +1077,21 @@ PY;
             }
         }
         $widthTotal = array_sum($columnWidths);
+        $resolvedColumnWidths = [];
         for ($column = 0; $column < $columnCount; $column++) {
             if (count($columnWidths) === $columnCount && $widthTotal > 0) {
                 $columnWidth = (int) round(($columnWidths[$column] / $widthTotal) * 9000);
             } else {
                 $columnWidth = (int) floor(9000 / $columnCount);
             }
+            $resolvedColumnWidths[$column] = $columnWidth;
             $gridColumns .= '<w:gridCol w:w="'.$columnWidth.'"/>';
         }
 
         $wordRows = '';
         $occupied = [];
         foreach ($rows as $rowIndex => $row) {
-            $wordRows .= $this->renderWordRow($row, $rowIndex, $columnCount, $occupied);
+            $wordRows .= $this->renderWordRow($row, $rowIndex, $columnCount, $occupied, $resolvedColumnWidths);
         }
 
         return '<w:tbl><w:tblPr><w:tblW w:w="100" w:type="pct"/><w:tblLayout w:type="fixed"/><w:tblBorders>'
@@ -1102,7 +1104,7 @@ PY;
             .'</w:tblBorders></w:tblPr><w:tblGrid>'.$gridColumns.'</w:tblGrid>'.$wordRows.'</w:tbl>';
     }
 
-    private function renderWordRow(DOMElement $row, int $rowIndex, int $columnCount, array &$occupied): string
+    private function renderWordRow(DOMElement $row, int $rowIndex, int $columnCount, array &$occupied, array $columnWidths): string
     {
         $sourceCells = [];
         foreach ($row->childNodes as $cell) {
@@ -1116,12 +1118,12 @@ PY;
         $column = 0;
         while ($column < $columnCount) {
             if (isset($occupied[$rowIndex][$column])) {
-                $cells .= '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/><w:vMerge/></w:tcPr><w:p/></w:tc>';
+                $cells .= '<w:tc><w:tcPr><w:tcW w:w="'.$columnWidths[$column].'" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>';
                 $column++;
                 continue;
             }
             if (! isset($sourceCells[$sourceIndex])) {
-                $cells .= '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>';
+                $cells .= '<w:tc><w:tcPr><w:tcW w:w="'.$columnWidths[$column].'" w:type="dxa"/></w:tcPr><w:p/></w:tc>';
                 $column++;
                 continue;
             }
@@ -1137,7 +1139,11 @@ PY;
 
             $colspan = max(1, (int) $cell->getAttribute('colspan'));
             $rowspan = max(1, (int) $cell->getAttribute('rowspan'));
-            $cellProperties = '<w:tcW w:w="0" w:type="auto"/>'
+            $cellWidth = 0;
+            for ($widthColumn = $column; $widthColumn < $column + $colspan; $widthColumn++) {
+                $cellWidth += $columnWidths[$widthColumn] ?? 0;
+            }
+            $cellProperties = '<w:tcW w:w="'.$cellWidth.'" w:type="dxa"/>'
                 .($colspan > 1 ? '<w:gridSpan w:val="'.$colspan.'"/>' : '')
                 .($rowspan > 1 ? '<w:vMerge w:val="restart"/>' : '');
 
