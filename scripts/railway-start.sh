@@ -19,6 +19,12 @@ php artisan config:clear
 php artisan route:clear
 php artisan view:clear
 
+if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+    echo "Railway public domain: ${RAILWAY_PUBLIC_DOMAIN}"
+fi
+echo "APP_URL: ${APP_URL:-unset}"
+echo "ASSET_URL: ${ASSET_URL:-unset}"
+
 php artisan migrate --force
 php artisan storage:link >/dev/null 2>&1 || true
 php artisan optimize
