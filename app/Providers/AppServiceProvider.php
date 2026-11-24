@@ -26,8 +26,7 @@ class AppServiceProvider extends ServiceProvider
 
         $isHttpsDeployment = str_starts_with(strtolower($assetUrl), 'https://')
             || str_starts_with(strtolower($appUrl), 'https://')
-            || $railwayDomain !== ''
-            || app()->environment('production');
+            || $railwayDomain !== '';
 
         if ($isHttpsDeployment) {
             URL::forceScheme('https');

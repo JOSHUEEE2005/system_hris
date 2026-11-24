@@ -3,14 +3,18 @@
 $appUrl = trim((string) env('APP_URL', 'http://localhost'));
 $assetUrl = trim((string) env('ASSET_URL', ''));
 $railwayDomain = trim((string) getenv('RAILWAY_PUBLIC_DOMAIN'));
+$appEnvironment = trim((string) env('APP_ENV', 'production'));
+$isProductionUrl = $appEnvironment === 'production' || $railwayDomain !== '';
 
 if ($railwayDomain !== '') {
     $appUrl = 'https://'.$railwayDomain;
     $assetUrl = $assetUrl !== '' ? $assetUrl : $appUrl;
 }
 
-$appUrl = preg_replace('#^http://#i', 'https://', $appUrl);
-$assetUrl = $assetUrl !== '' ? preg_replace('#^http://#i', 'https://', $assetUrl) : null;
+if ($isProductionUrl) {
+    $appUrl = preg_replace('#^http://#i', 'https://', $appUrl);
+    $assetUrl = $assetUrl !== '' ? preg_replace('#^http://#i', 'https://', $assetUrl) : null;
+}
 
 return [
 
