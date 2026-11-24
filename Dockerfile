@@ -19,6 +19,7 @@ RUN python3 -m pip install --break-system-packages -r requirements-pdf.txt \
     && composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction \
     && npm ci \
     && npm run build \
+    && rm -f public/hot \
     && chmod +x scripts/railway-start.sh
 
 EXPOSE 8080
