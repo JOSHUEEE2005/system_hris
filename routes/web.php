@@ -89,6 +89,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     Route::middleware('permission:contracts.manage')->group(function () {
         Route::post('/contracts/folders', [ContractController::class, 'storeFolder'])->name('contracts.folders.store');
         Route::post('/contracts', [ContractController::class, 'store'])->name('contracts.store');
+        Route::post('/contracts/{contract}/convert-editor', [ContractController::class, 'convertToEditor'])->name('contracts.convert-editor');
         Route::put('/contracts/{contract}', [ContractController::class, 'update'])->name('contracts.update');
         Route::delete('/contracts/{contract}', [ContractController::class, 'destroy'])->name('contracts.destroy');
     });

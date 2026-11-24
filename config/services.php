@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'pdf_layout' => [
+        'python' => env('PDF_LAYOUT_PYTHON'),
+    ],
+
 ];

@@ -131,10 +131,26 @@
                                 @if ($isTemplate)
                                     <a class="contract-action-primary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'pdf']) }}">PDF</a>
                                     <a class="contract-action-secondary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'docx']) }}">Word</a>
+                                    @if ($contract->original_pdf_path)
+                                        <a class="contract-action-secondary" href="{{ route('admin.contracts.download', [$contract, 'original' => 1]) }}">Original PDF</a>
+                                        <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', [$contract, 'original' => 1]) }}" target="_blank" rel="noopener">View original</a>
+                                    @endif
                                 @else
                                     <a class="contract-action-primary" href="{{ route('admin.contracts.download', $contract) }}">Download</a>
                                 @endif
                                 @if ($canManageContracts)
+                                    @if (! $isTemplate && in_array(strtolower(pathinfo($contract->original_filename, PATHINFO_EXTENSION)), ['pdf', 'docx'], true))
+                                        <form method="POST" action="{{ route('admin.contracts.convert-editor', $contract) }}">
+                                            @csrf
+                                            <button class="contract-action-secondary" type="submit">Convert & edit</button>
+                                        </form>
+                                    @endif
+                                    @if ($isTemplate && $contract->original_pdf_path)
+                                        <form method="POST" action="{{ route('admin.contracts.convert-editor', $contract) }}" onsubmit="return confirm('This replaces the current editable content with a fresh conversion of the original PDF and resets recipient acknowledgements. Continue?')">
+                                            @csrf
+                                            <button class="contract-action-secondary" type="submit">Rebuild from Original</button>
+                                        </form>
+                                    @endif
                                     <button
                                         class="contract-action-secondary"
                                         type="button"

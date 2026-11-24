@@ -28,6 +28,28 @@ class ContractsWorkflowTest extends TestCase
         Storage::fake('local');
     }
 
+    public function test_pdf_conversion_sanitizer_preserves_large_table_spans(): void
+    {
+        $html = app(ContractDocumentService::class)->sanitizeHtml(
+            '<table><tbody><tr><th colspan="11" rowspan="13">Merged section</th></tr></tbody></table>',
+        );
+
+        $this->assertStringContainsString('colspan="11"', $html);
+        $this->assertStringContainsString('rowspan="13"', $html);
+    }
+
+    public function test_pdf_export_converts_legacy_png_images_when_gd_is_unavailable(): void
+    {
+        if (extension_loaded('gd')) {
+            $this->markTestSkipped('This regression applies only when PHP GD is unavailable.');
+        }
+
+        $html = '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=" alt="Header">';
+        $pdf = app(ContractDocumentService::class)->renderPdf($html);
+
+        $this->assertStringStartsWith('%PDF-', $pdf);
+    }
+
     public function test_hr_can_send_a_private_file_to_selected_employees_and_recipients_can_acknowledge_it(): void
     {
         $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
@@ -166,6 +188,174 @@ class ContractsWorkflowTest extends TestCase
         ])->assertRedirect();
 
         $this->assertNull($contract->fresh()->folder_id);
+    }
+
+    public function test_hr_can_convert_an_uploaded_docx_into_the_contract_editor(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-test-docx-');
+        $archive = new \ZipArchive();
+        $archive->open($temporaryPath, \ZipArchive::OVERWRITE);
+        $archive->addFromString('word/document.xml',
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            .'<w:body>'
+            .'<w:p><w:r><w:t>Editable uploaded agreement</w:t></w:r></w:p>'
+            .'<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Description</w:t></w:r></w:p></w:tc></w:tr>'
+            .'<w:tr><w:tc><w:p><w:r><w:t>Pending</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Complete onboarding</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+            .'</w:body>'
+            .'</w:document>'
+        );
+        $archive->close();
+        $contents = file_get_contents($temporaryPath);
+        @unlink($temporaryPath);
+
+        Storage::disk('local')->put('contracts/uploaded-agreement.docx', $contents);
+        $contract = Contract::create([
+            'title' => 'Uploaded agreement',
+            'original_filename' => 'uploaded-agreement.docx',
+            'storage_path' => 'contracts/uploaded-agreement.docx',
+            'mime_type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'file_size' => strlen($contents),
+            'recipient_type' => 'individual',
+            'department_id' => null,
+            'created_by' => $hr->id,
+            'sent_at' => now(),
+        ]);
+        $contract->recipients()->create([
+            'user_id' => $recipient->id,
+            'status' => 'Received',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($hr)->post(route('admin.contracts.convert-editor', $contract))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $contract->refresh();
+        $this->assertNotNull($contract->content_html);
+        $this->assertStringContainsString('Editable uploaded agreement', $contract->content_html);
+        $this->assertStringContainsString('<table>', $contract->content_html);
+        $this->assertStringContainsString('Complete onboarding', $contract->content_html);
+        $this->assertSame('text/html', $contract->mime_type);
+        $this->assertSame('Pending', $contract->recipients()->firstOrFail()->status);
+    }
+
+    public function test_hr_can_convert_an_uploaded_pdf_into_layout_tables(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+        $pdfPath = base_path('storage/app/private/contracts/mj00q3DsIoQGAXXjNO1cNwaXorqB5VTurXVArFRR.pdf');
+
+        if (! is_file($pdfPath)) {
+            $this->markTestSkipped('The sample PDF is not available in this test environment.');
+        }
+
+        $contents = file_get_contents($pdfPath);
+        Storage::disk('local')->put('contracts/layout-sample.pdf', $contents);
+        $contract = Contract::create([
+            'title' => 'Layout sample',
+            'original_filename' => 'layout-sample.pdf',
+            'storage_path' => 'contracts/layout-sample.pdf',
+            'mime_type' => 'application/pdf',
+            'file_size' => strlen($contents),
+            'recipient_type' => 'individual',
+            'department_id' => null,
+            'created_by' => $hr->id,
+            'sent_at' => now(),
+        ]);
+        $contract->recipients()->create([
+            'user_id' => $recipient->id,
+            'status' => 'Pending',
+        ]);
+
+        $this->actingAs($hr)->post(route('admin.contracts.convert-editor', $contract))
+            ->assertRedirect();
+
+        $contract->refresh();
+        $this->assertNotNull($contract->content_html);
+        $this->assertStringContainsString('<table class="converted-pdf-table"', $contract->content_html);
+        $this->assertStringContainsString('converted-pdf-header', $contract->content_html);
+        $this->assertStringContainsString('src="data:image/jpeg;base64,', $contract->content_html);
+        $this->assertStringContainsString('rowspan=', $contract->content_html);
+        $this->assertStringContainsString('colspan="6"', $contract->content_html);
+        $this->assertStringContainsString(
+            '<tr class="converted-pdf-section-row"><th class="converted-pdf-section-cell" colspan="6">',
+            $contract->content_html,
+        );
+        $this->assertMatchesRegularExpression(
+            '/class="converted-pdf-page" style="width:[0-9.]+pt;min-height:[0-9.]+pt"/',
+            $contract->content_html,
+        );
+        $this->assertStringContainsString('STATUS', $contract->content_html);
+        $this->assertStringContainsString('DESCRIPTION', $contract->content_html);
+
+        $this->actingAs($hr)->get(route('admin.contracts.preview', $contract))
+            ->assertOk()
+            ->assertHeader('Content-Type', 'text/html; charset=UTF-8')
+            ->assertSee('STATUS')
+            ->assertSee('converted-pdf-header');
+
+        $this->actingAs($hr)->get(route('admin.contracts.download', $contract))
+            ->assertOk()
+            ->assertDownload();
+    }
+
+    public function test_hr_can_rebuild_a_converted_pdf_from_its_retained_original(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+        $originalPath = 'contracts/original-pdfs/original.pdf';
+        $editablePath = 'contracts/editable/current.html';
+        $originalContents = 'retained original PDF';
+        Storage::disk('local')->put($originalPath, $originalContents);
+        Storage::disk('local')->put($editablePath, '<p>Old conversion</p>');
+        $contract = Contract::create([
+            'title' => 'Layout sample',
+            'original_filename' => 'layout-sample.html',
+            'storage_path' => $editablePath,
+            'original_pdf_path' => $originalPath,
+            'mime_type' => 'text/html',
+            'file_size' => 20,
+            'recipient_type' => 'individual',
+            'department_id' => null,
+            'created_by' => $hr->id,
+            'sent_at' => now(),
+            'content_html' => '<p>Old conversion</p>',
+        ]);
+        $contract->recipients()->create([
+            'user_id' => $recipient->id,
+            'status' => 'Received',
+            'received_at' => now(),
+        ]);
+
+        $this->mock(ContractDocumentService::class)
+            ->shouldReceive('extractUploadedHtml')
+            ->once()
+            ->with($originalContents, 'application/pdf', 'original.pdf')
+            ->andReturn('<p>Rebuilt layout</p>');
+
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Rebuild from Original');
+
+        $this->actingAs($hr)->post(route('admin.contracts.convert-editor', $contract))
+            ->assertRedirect()
+            ->assertSessionHas('status', 'The editable contract was rebuilt from its original PDF. Review it and resend it to recipients.');
+
+        $contract->refresh();
+        $this->assertSame($originalPath, $contract->original_pdf_path);
+        $this->assertSame('Rebuilt layout', strip_tags($contract->content_html));
+        $this->assertNotSame($editablePath, $contract->storage_path);
+        $this->assertSame('Pending', $contract->recipients()->firstOrFail()->status);
+        $this->assertNull($contract->recipients()->firstOrFail()->received_at);
+        Storage::disk('local')->assertExists($originalPath);
+        Storage::disk('local')->assertMissing($editablePath);
     }
 
     public function test_employees_from_each_department_only_see_home_and_their_assigned_contracts(): void

@@ -9,17 +9,31 @@ use DOMNode;
 use Dompdf\Dompdf;
 use Dompdf\Options;
 use RuntimeException;
+use Symfony\Component\Process\ExecutableFinder;
+use Symfony\Component\Process\Process;
 use ZipArchive;
 
 class ContractDocumentService
 {
     private const ALLOWED_TAGS = [
-        'a', 'b', 'blockquote', 'br', 'div', 'em', 'footer', 'h1', 'h2',
+        'a', 'b', 'blockquote', 'br', 'col', 'colgroup', 'div', 'em', 'footer', 'h1', 'h2',
         'h3', 'header', 'i', 'li', 'ol', 'p', 's', 'span', 'strong',
-        'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul',
+        'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul', 'img',
     ];
 
     private const DROP_TAGS = ['embed', 'iframe', 'object', 'script', 'style', 'svg'];
+    private const CONVERTED_PDF_CLASSES = [
+        'converted-pdf-page',
+        'converted-pdf-header',
+        'converted-pdf-page-break',
+        'converted-pdf-text',
+        'converted-pdf-table',
+        'converted-pdf-section-row',
+        'converted-pdf-header-row',
+        'converted-pdf-section-cell',
+        'converted-pdf-heading-cell',
+        'converted-pdf-cell',
+    ];
 
     public function sanitizeHtml(string $html): string
     {
@@ -33,6 +47,379 @@ class ContractDocumentService
         }
 
         return $sanitized;
+    }
+
+    public function extractUploadedHtml(string $contents, string $mimeType, string $filename): string
+    {
+        $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $isDocx = $mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            || $extension === 'docx';
+
+        if ($isDocx) {
+            return $this->extractDocxHtml($contents);
+        }
+
+        if ($mimeType === 'application/pdf' || $extension === 'pdf') {
+            return $this->extractPdfHtml($contents);
+        }
+
+        throw new RuntimeException('Only PDF and Word (.docx) uploads can be converted for editing.');
+    }
+
+    private function extractDocxHtml(string $contents): string
+    {
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-input-');
+        if ($temporaryPath === false || file_put_contents($temporaryPath, $contents) === false) {
+            throw new RuntimeException('The uploaded Word file could not be read.');
+        }
+
+        $archive = new ZipArchive();
+        if ($archive->open($temporaryPath) !== true) {
+            @unlink($temporaryPath);
+            throw new RuntimeException('The uploaded Word file is not a valid .docx document.');
+        }
+
+        $documentXml = $archive->getFromName('word/document.xml');
+        $archive->close();
+        @unlink($temporaryPath);
+
+        if (! is_string($documentXml) || $documentXml === '') {
+            throw new RuntimeException('No editable text was found in the uploaded Word file.');
+        }
+
+        $document = new DOMDocument();
+        if (! @$document->loadXML($documentXml)) {
+            throw new RuntimeException('The uploaded Word file could not be parsed.');
+        }
+
+        $xpath = new \DOMXPath($document);
+        $xpath->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
+        $html = '';
+        $body = $xpath->query('//w:body')->item(0);
+
+        if ($body !== null) {
+            foreach ($body->childNodes as $block) {
+                if (! $block instanceof DOMElement) {
+                    continue;
+                }
+
+                if ($block->tagName === 'w:p') {
+                    $text = '';
+                    foreach ($xpath->query('.//w:t', $block) as $textNode) {
+                        $text .= $textNode->textContent;
+                    }
+                    $text = trim(preg_replace('/\s+/u', ' ', $text) ?? '');
+                    if ($text !== '') {
+                        $html .= '<p>'.htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</p>';
+                    }
+                } elseif ($block->tagName === 'w:tbl') {
+                    $html .= '<table><tbody>';
+                    foreach ($xpath->query('./w:tr', $block) as $row) {
+                        $html .= '<tr>';
+                        foreach ($xpath->query('./w:tc', $row) as $cell) {
+                            $cellText = '';
+                            foreach ($xpath->query('.//w:t', $cell) as $textNode) {
+                                $cellText .= $textNode->textContent;
+                            }
+                            $html .= '<td>'.htmlspecialchars(trim(preg_replace('/\s+/u', ' ', $cellText) ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</td>';
+                        }
+                        $html .= '</tr>';
+                    }
+                    $html .= '</tbody></table>';
+                }
+            }
+        }
+
+        if (trim(strip_tags($html)) === '') {
+            throw new RuntimeException('No editable text was found in the uploaded Word file.');
+        }
+
+        return $this->sanitizeHtml($html);
+    }
+
+    private function extractPdfHtml(string $contents): string
+    {
+        $pdfPath = tempnam(sys_get_temp_dir(), 'contract-pdf-');
+        $conversionPath = tempnam(sys_get_temp_dir(), 'contract-pdf-json-');
+        if ($pdfPath === false || $conversionPath === false
+            || file_put_contents($pdfPath, $contents) === false) {
+            throw new RuntimeException('The uploaded PDF could not be prepared for conversion.');
+        }
+
+        $python = $this->resolvePdfPython();
+        if (! $this->pdfPythonIsAvailable($python)) {
+            @unlink($pdfPath);
+            @unlink($conversionPath);
+            throw new RuntimeException(
+                'Python 3 was not found by the application server. Install Python 3 and PyMuPDF, '
+                .'or set PDF_LAYOUT_PYTHON to the executable path.',
+            );
+        }
+
+        $script = <<<'PY'
+import base64, json, sys
+import pymupdf
+
+document = pymupdf.open(sys.argv[1])
+pages = []
+for page in document:
+    found = page.find_tables()
+    tables = []
+    for table in found.tables:
+        extracted = table.extract()
+        rows = []
+        for row_index, row in enumerate(table.rows):
+            cells = []
+            for column_index, cell in enumerate(row.cells):
+                if cell is None:
+                    cells.append(None)
+                    continue
+                text = page.get_textbox(pymupdf.Rect(cell)).strip()
+                if not text and row_index < len(extracted) and column_index < len(extracted[row_index]):
+                    text = extracted[row_index][column_index] or ""
+                cells.append({"rect": list(cell), "text": text})
+            rows.append(cells)
+        tables.append({"bbox": list(table.bbox), "rows": rows})
+
+    table_boxes = [pymupdf.Rect(table["bbox"]) for table in tables]
+    blocks = []
+    for block in page.get_text("blocks", sort=True):
+        bounds = pymupdf.Rect(block[:4])
+        text = (block[4] or "").strip()
+        if not text:
+            continue
+        if any(bounds.intersects(box) and bounds.intersect(box).get_area() > bounds.get_area() * 0.3 for box in table_boxes):
+            continue
+        blocks.append({"y": bounds.y0, "x": bounds.x0, "width": bounds.width, "text": text})
+
+    header = ""
+    if tables:
+        first_table_y = min(table["bbox"][1] for table in tables)
+        has_header_image = any(
+            image["bbox"][1] < first_table_y and image["bbox"][3] > 0
+            for image in page.get_image_info(xrefs=True)
+        )
+        if has_header_image and first_table_y > 20:
+            clip = pymupdf.Rect(0, 0, page.rect.width, first_table_y)
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(1.3, 1.3), clip=clip, alpha=False)
+            header = base64.b64encode(pixmap.tobytes("jpg", jpg_quality=92)).decode("ascii")
+            blocks = [block for block in blocks if block["y"] >= first_table_y]
+
+    items = blocks + [{"y": table["bbox"][1], "x": table["bbox"][0], "table": table} for table in tables]
+    items.sort(key=lambda item: (item["y"], item["x"]))
+    pages.append({"width": page.rect.width, "height": page.rect.height, "header": header, "items": items})
+
+with open(sys.argv[2], "w", encoding="utf-8") as output:
+    json.dump({"pages": pages}, output, ensure_ascii=False)
+PY;
+        $process = new Process([$python, '-c', $script, $pdfPath, $conversionPath]);
+        $process->setTimeout(270);
+        $process->run();
+
+        @unlink($pdfPath);
+        if (! $process->isSuccessful()) {
+            @unlink($conversionPath);
+            $errorOutput = trim($process->getErrorOutput());
+            throw new RuntimeException(
+                'The PDF layout could not be converted. Install Python 3 and PyMuPDF on the application server, '
+                .'and set PDF_LAYOUT_PYTHON if needed.'
+                .($errorOutput !== '' ? ' Details: '.$errorOutput : ''),
+            );
+        }
+
+        $conversionJson = file_get_contents($conversionPath);
+        @unlink($conversionPath);
+        if (! is_string($conversionJson) || trim($conversionJson) === '') {
+            throw new RuntimeException('No editable text or tables could be extracted from this PDF.');
+        }
+
+        $conversion = json_decode($conversionJson, true);
+        if (! is_array($conversion) || empty($conversion['pages'])) {
+            throw new RuntimeException('No editable text or tables could be extracted from this PDF.');
+        }
+
+        return $this->sanitizeHtml($this->structuredPdfToHtml($conversion['pages']));
+    }
+
+    private function resolvePdfPython(): string
+    {
+        $configuredPython = config('services.pdf_layout.python');
+        if (is_string($configuredPython) && trim($configuredPython) !== '') {
+            return trim($configuredPython);
+        }
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $localAppData = getenv('LOCALAPPDATA');
+            if (is_string($localAppData) && $localAppData !== '') {
+                foreach (['Python314', 'Python313', 'Python312', 'Python311', 'Python310'] as $version) {
+                    $candidate = $localAppData.'\\Programs\\Python\\'.$version.'\\python.exe';
+                    if (is_file($candidate)) {
+                        return $candidate;
+                    }
+                }
+            }
+
+            return 'python';
+        }
+
+        return 'python3';
+    }
+
+    private function pdfPythonIsAvailable(string $python): bool
+    {
+        $isCommand = preg_match('/^[A-Za-z0-9._-]+$/D', $python) === 1;
+
+        return $isCommand
+            ? (new ExecutableFinder())->find($python) !== null
+            : is_file($python);
+    }
+
+    private function structuredPdfToHtml(array $pages): string
+    {
+        $html = '';
+        foreach ($pages as $pageIndex => $page) {
+            $pageWidth = max(1, (float) $page['width']);
+            $pageHeight = max(1, (float) $page['height']);
+            $html .= '<div class="converted-pdf-page" style="width:'.$pageWidth.'pt;min-height:'.$pageHeight.'pt">';
+            if (! empty($page['header'])) {
+                $html .= '<img class="converted-pdf-header" src="data:image/jpeg;base64,'.$page['header'].'" alt="Original PDF page header">';
+            }
+            foreach ($page['items'] as $item) {
+                if (isset($item['table'])) {
+                    $html .= $this->renderExtractedPdfTable($item['table'], (float) $page['width']);
+                } else {
+                    $text = nl2br(htmlspecialchars((string) $item['text'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
+                    $left = max(0, min(100, (float) $item['x'] / max(1, (float) $page['width']) * 100));
+                    $width = max(1, min(100 - $left, (float) ($item['width'] ?? $page['width']) / max(1, (float) $page['width']) * 100));
+                    $html .= '<p class="converted-pdf-text" style="margin-left:'.$left.'%;width:'.$width.'%">'.$text.'</p>';
+                }
+            }
+            $html .= '</div>';
+            if ($pageIndex < count($pages) - 1) {
+                $html .= '<div class="converted-pdf-page-break"></div>';
+            }
+        }
+
+        return $html;
+    }
+
+    private function renderExtractedPdfTable(array $table, float $pageWidth): string
+    {
+        $rows = $table['rows'] ?? [];
+        $box = $table['bbox'] ?? null;
+        if ($rows === [] || ! is_array($box) || count($box) < 4 || $pageWidth <= 0) {
+            return '';
+        }
+
+        $xBoundaries = [(float) $box[0], (float) $box[2]];
+        foreach ($rows as $row) {
+            foreach ($row as $cell) {
+                if (is_array($cell) && isset($cell['rect'])) {
+                    $xBoundaries[] = (float) $cell['rect'][0];
+                    $xBoundaries[] = (float) $cell['rect'][2];
+                }
+            }
+        }
+        sort($xBoundaries);
+        $xBoundaries = array_values(array_reduce($xBoundaries, function (array $unique, float $x): array {
+            if ($unique === [] || abs(end($unique) - $x) > 1.0) {
+                $unique[] = $x;
+            }
+
+            return $unique;
+        }, []));
+        $columnCount = max(1, count($xBoundaries) - 1);
+        $tableWidth = max(1.0, (float) $box[2] - (float) $box[0]);
+        $width = min(100, $tableWidth / $pageWidth * 100);
+        $marginLeft = max(0, (float) $box[0] / $pageWidth * 100);
+        $html = '<table class="converted-pdf-table" style="width:'.$width.'%;margin-left:'.$marginLeft.'%"><colgroup>';
+        for ($column = 0; $column < $columnCount; $column++) {
+            $columnWidth = (($xBoundaries[$column + 1] - $xBoundaries[$column]) / $tableWidth) * 100;
+            $html .= '<col width="'.$columnWidth.'%" style="width:'.$columnWidth.'%">';
+        }
+        $html .= '</colgroup><tbody>';
+        $occupied = [];
+        $rowTops = [];
+        foreach ($rows as $row) {
+            $tops = [];
+            foreach ($row as $cell) {
+                if (is_array($cell) && isset($cell['rect'])) {
+                    $tops[] = (float) $cell['rect'][1];
+                }
+            }
+            $rowTops[] = $tops === [] ? null : min($tops);
+        }
+
+        foreach ($rows as $rowIndex => $row) {
+            $texts = array_map(fn ($cell): string => is_array($cell) ? trim((string) ($cell['text'] ?? '')) : '', $row);
+            $rowCells = array_values(array_filter($row, 'is_array'));
+            $isSection = count($rowCells) === 1
+                && ((float) $rowCells[0]['rect'][2] - (float) $rowCells[0]['rect'][0]) >= $tableWidth * 0.8;
+            $isHeader = count(array_filter($texts, fn (string $text): bool => in_array(strtoupper(trim($text)), [
+                'STATUS', 'DESCRIPTION', 'ORGANIZATION', 'RESPONSIBILITY', 'REMARKS',
+            ], true))) >= 3;
+            $rowClass = $isSection ? ' class="converted-pdf-section-row"' : ($isHeader ? ' class="converted-pdf-header-row"' : '');
+            $html .= '<tr'.$rowClass.'>';
+            $column = 0;
+
+            foreach ($row as $cellIndex => $cell) {
+                while (isset($occupied[$rowIndex][$column])) {
+                    $column++;
+                }
+                if (! is_array($cell) || ! isset($cell['rect'])) {
+                    $column++;
+                    continue;
+                }
+
+                $rect = $cell['rect'];
+                $start = 0;
+                foreach ($xBoundaries as $boundaryIndex => $boundary) {
+                    if (abs($boundary - (float) $rect[0]) <= 1.0) {
+                        $start = $boundaryIndex;
+                        break;
+                    }
+                }
+                $end = $start + 1;
+                foreach ($xBoundaries as $boundaryIndex => $boundary) {
+                    if ($boundaryIndex > $start && abs($boundary - (float) $rect[2]) <= 1.0) {
+                        $end = $boundaryIndex;
+                        break;
+                    }
+                }
+                $colspan = max(1, $end - $start);
+                while ($column < $start || isset($occupied[$rowIndex][$column])) {
+                    $column++;
+                }
+                $rowspan = 1;
+                $rowBottom = (float) $rect[3];
+                for ($nextRow = $rowIndex + 1; $nextRow < count($rows); $nextRow++) {
+                    $nextTop = $rowTops[$nextRow] ?? null;
+                    if ($nextTop === null || $nextTop >= $rowBottom - 1.0) {
+                        break;
+                    }
+                    $rowspan++;
+                }
+
+                $class = $isSection ? 'converted-pdf-section-cell' : ($isHeader ? 'converted-pdf-heading-cell' : 'converted-pdf-cell');
+                $tag = $isHeader || $isSection ? 'th' : 'td';
+                $spanAttrs = ($colspan > 1 ? ' colspan="'.$colspan.'"' : '')
+                    .($rowspan > 1 ? ' rowspan="'.$rowspan.'"' : '');
+                $text = trim((string) ($cell['text'] ?? ''));
+                $text = str_replace(["\u{e71f}", ''], '☐', $text);
+                $escapedText = nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
+                $html .= '<'.$tag.' class="'.$class.'"'.$spanAttrs.'>'.$escapedText.'</'.$tag.'>';
+
+                for ($spanColumn = $column; $spanColumn < $column + $colspan; $spanColumn++) {
+                    for ($spanRow = $rowIndex + 1; $spanRow < $rowIndex + $rowspan; $spanRow++) {
+                        $occupied[$spanRow][$spanColumn] = true;
+                    }
+                }
+                $column += $colspan;
+            }
+            $html .= '</tr>';
+        }
+
+        return $html.'</tbody></table>';
     }
 
     public function personalizeHtml(string $html, ?User $recipient): string
@@ -87,16 +474,241 @@ class ContractDocumentService
 
     public function renderPdf(string $html): string
     {
+        $html = $this->convertEmbeddedPngImagesForPdf($html);
+        $html = $this->applyConvertedPdfTableColumnWidths($html);
+        $pageSize = $this->convertedPdfPageSize($html);
+
         $options = new Options();
         $options->set('isRemoteEnabled', false);
         $options->set('isPhpEnabled', false);
 
         $renderer = new Dompdf($options);
-        $renderer->loadHtml($this->wrapHtml($html), 'UTF-8');
-        $renderer->setPaper('A4');
+        if ($pageSize === null) {
+            $renderer->loadHtml($this->wrapHtml($html), 'UTF-8');
+            $renderer->setPaper('A4');
+        } else {
+            [$pageWidth, $pageHeight] = $pageSize;
+            $renderer->loadHtml($this->wrapConvertedPdfHtml($html, $pageWidth, $pageHeight), 'UTF-8');
+            $renderer->setPaper([0, 0, $pageWidth, $pageHeight]);
+        }
         $renderer->render();
 
         return $renderer->output();
+    }
+
+    private function applyConvertedPdfTableColumnWidths(string $html): string
+    {
+        if (! str_contains($html, 'converted-pdf-table')) {
+            return $html;
+        }
+
+        $document = $this->parseFragment($html);
+        $root = $this->fragmentRoot($document);
+        $changed = false;
+
+        foreach ($root->getElementsByTagName('table') as $table) {
+            if (! $table instanceof DOMElement
+                || ! in_array('converted-pdf-table', preg_split('/\s+/', trim($table->getAttribute('class'))), true)) {
+                continue;
+            }
+
+            $columnWidths = [];
+            foreach ($table->getElementsByTagName('col') as $col) {
+                if (! $col instanceof DOMElement
+                    || ! preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $col->getAttribute('style'), $widthMatch)) {
+                    $columnWidths = [];
+                    break;
+                }
+                $columnWidths[] = (float) $widthMatch[1];
+                $col->setAttribute('width', $widthMatch[1].'%');
+            }
+            if ($columnWidths === []) {
+                continue;
+            }
+
+            $body = $table->getElementsByTagName('tbody')->item(0);
+            if ($body instanceof DOMElement) {
+                $widthRow = $document->createElement('tr');
+                foreach ($columnWidths as $columnWidth) {
+                    $widthCell = $document->createElement('td');
+                    $widthCell->setAttribute(
+                        'style',
+                        'width:'.$columnWidth.'%;height:0;padding:0;border:0;font-size:0;line-height:0',
+                    );
+                    $widthRow->appendChild($widthCell);
+                }
+                $body->insertBefore($widthRow, $body->firstChild);
+            }
+
+            $occupied = [];
+            foreach ($table->getElementsByTagName('tr') as $rowIndex => $row) {
+                $column = 0;
+                foreach ($row->childNodes as $cell) {
+                    if (! $cell instanceof DOMElement || ! in_array(strtolower($cell->tagName), ['td', 'th'], true)) {
+                        continue;
+                    }
+                    while (isset($occupied[$rowIndex][$column])) {
+                        $column++;
+                    }
+
+                    $colspan = max(1, (int) $cell->getAttribute('colspan'));
+                    $rowspan = max(1, (int) $cell->getAttribute('rowspan'));
+                    $cellWidth = array_sum(array_slice($columnWidths, $column, $colspan));
+                    if ($cellWidth > 0) {
+                        $styles = array_filter(array_map('trim', explode(';', $cell->getAttribute('style'))));
+                        $styles = array_values(array_filter(
+                            $styles,
+                            static fn (string $style): bool => ! preg_match('/^width\s*:/i', $style),
+                        ));
+                        $styles[] = 'width:'.rtrim(rtrim(sprintf('%.6F', $cellWidth), '0'), '.').'%';
+                        $cell->setAttribute('style', implode(';', $styles));
+                        $changed = true;
+                    }
+
+                    for ($spanRow = $rowIndex; $spanRow < $rowIndex + $rowspan; $spanRow++) {
+                        for ($spanColumn = $column; $spanColumn < $column + $colspan; $spanColumn++) {
+                            $occupied[$spanRow][$spanColumn] = true;
+                        }
+                    }
+                    $column += $colspan;
+                }
+            }
+        }
+
+        if (! $changed) {
+            return $html;
+        }
+
+        $converted = '';
+        foreach ($root->childNodes as $child) {
+            $converted .= $document->saveHTML($child);
+        }
+
+        return $converted;
+    }
+
+    private function convertedPdfPageSize(string $html): ?array
+    {
+        if (! preg_match(
+            '/<div\b(?=[^>]*\bclass=["\'][^"\']*\bconverted-pdf-page\b)[^>]*>/i',
+            $html,
+            $pageTag,
+        ) || ! preg_match('/\bstyle=(["\'])(.*?)\1/i', $pageTag[0], $styleMatch)) {
+            return null;
+        }
+
+        $style = $styleMatch[2];
+        if (! preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)pt\s*(?:;|$)/i', $style, $widthMatch)
+            || ! preg_match('/(?:^|;)\s*min-height\s*:\s*([0-9]+(?:\.[0-9]+)?)pt\s*(?:;|$)/i', $style, $heightMatch)) {
+            return null;
+        }
+
+        $width = (float) $widthMatch[1];
+        $height = (float) $heightMatch[1];
+        if ($width <= 0 || $height <= 0 || $width > 5000 || $height > 5000) {
+            return null;
+        }
+
+        return [$width, $height];
+    }
+
+    private function wrapConvertedPdfHtml(string $html, float $pageWidth, float $pageHeight): string
+    {
+        $width = $pageWidth.'pt';
+        $height = $pageHeight.'pt';
+
+        return '<!doctype html><html><head><meta charset="UTF-8"><style>'
+            .'@page{margin:0}html,body{width:'.$width.';margin:0;padding:0;background:#fff}'
+            .'body{font-family:DejaVu Sans,sans-serif;font-size:11pt;line-height:1.45;color:#1f2937}'
+            .'p{margin:0 0 10pt}.converted-pdf-page{box-sizing:border-box;width:'.$width.';min-height:0!important;margin:0;border:0;background:#fff;page-break-inside:auto}'
+            .'.converted-pdf-header{display:block;width:100%;height:auto;margin:0}'
+            .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:6pt;line-height:1.1;margin-top:0;margin-bottom:12pt}'
+            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;vertical-align:middle}'
+            .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:6pt}'
+            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold}'
+            .'.converted-pdf-table .converted-pdf-cell{background:#fff;color:#111}'
+            .'.converted-pdf-text{margin-top:2pt;margin-bottom:4pt;font-size:10pt;line-height:1.25;white-space:normal}'
+            .'.converted-pdf-page-break{height:0;page-break-before:always}'
+            .'</style></head><body>'.$html.'</body></html>';
+    }
+
+    private function convertEmbeddedPngImagesForPdf(string $html): string
+    {
+        if (extension_loaded('gd')) {
+            return $html;
+        }
+
+        $pattern = '~(\bsrc=)(["\'])data:image/png;base64,([A-Za-z0-9+/=]+)\2~i';
+        if (! preg_match_all($pattern, $html, $matches, PREG_SET_ORDER)) {
+            return $html;
+        }
+
+        $pngImages = array_values(array_unique(array_column($matches, 3)));
+        $python = $this->resolvePdfPython();
+        if (! $this->pdfPythonIsAvailable($python)) {
+            throw new RuntimeException(
+                'This contract contains PNG images, but PHP GD is unavailable. Install GD or configure '
+                .'Python 3 with PyMuPDF using PDF_LAYOUT_PYTHON to export it.',
+            );
+        }
+
+        $script = <<<'PY'
+import base64, json, sys
+import pymupdf
+
+converted = []
+for encoded in json.load(sys.stdin):
+    pixmap = pymupdf.Pixmap(base64.b64decode(encoded, validate=True))
+    if pixmap.alpha:
+        pixmap = pymupdf.Pixmap(pixmap, 0)
+    if pixmap.colorspace != pymupdf.csRGB:
+        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
+    converted.append(base64.b64encode(pixmap.tobytes("jpg", jpg_quality=92)).decode("ascii"))
+
+json.dump(converted, sys.stdout)
+PY;
+        $process = new Process([$python, '-c', $script]);
+        $process->setInput(json_encode($pngImages, JSON_THROW_ON_ERROR));
+        $process->setTimeout(120);
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            $errorOutput = trim($process->getErrorOutput());
+            throw new RuntimeException(
+                'PNG images could not be prepared for PDF export.'
+                .($errorOutput !== '' ? ' Details: '.$errorOutput : ''),
+            );
+        }
+
+        $jpegImages = json_decode($process->getOutput(), true);
+        if (! is_array($jpegImages) || count($jpegImages) !== count($pngImages)) {
+            throw new RuntimeException('PNG images could not be prepared for PDF export.');
+        }
+
+        foreach ($jpegImages as $jpegImage) {
+            if (! is_string($jpegImage)) {
+                throw new RuntimeException('PNG images could not be prepared for PDF export.');
+            }
+        }
+
+        $jpegByPng = array_combine($pngImages, $jpegImages);
+        $convertedHtml = preg_replace_callback(
+            $pattern,
+            static fn (array $match): string => $match[1].$match[2]
+                .'data:image/jpeg;base64,'.$jpegByPng[$match[3]].$match[2],
+            $html,
+        );
+
+        if ($convertedHtml === null) {
+            throw new RuntimeException('PNG images could not be prepared for PDF export.');
+        }
+
+        return $convertedHtml;
+    }
+
+    public function renderHtmlPreview(string $html): string
+    {
+        return $this->wrapHtml($html);
     }
 
     public function renderDocx(string $html): string
@@ -303,9 +915,12 @@ class ContractDocumentService
 
             $name = strtolower($attribute->name);
             $value = trim($attribute->value);
-            if ($name === 'style' && in_array($tag, ['div', 'p', 'td', 'th'], true)
-                && preg_match('/^text-align\s*:\s*(left|center|right|justify)\s*;?$/i', $value, $match)) {
-                $element->setAttribute('style', 'text-align: '.strtolower($match[1]));
+            if ($name === 'class' && in_array($value, self::CONVERTED_PDF_CLASSES, true)) {
+                $element->setAttribute('class', $value);
+                continue;
+            }
+            if ($name === 'style' && ($safeStyle = $this->sanitizeConvertedPdfStyle($tag, $value)) !== null) {
+                $element->setAttribute('style', $safeStyle);
 
                 continue;
             }
@@ -315,8 +930,25 @@ class ContractDocumentService
 
                 continue;
             }
+            if ($name === 'src' && $tag === 'img' && strlen($value) <= 5000000
+                && preg_match('#^data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$#', $value)) {
+                $element->setAttribute('src', $value);
+
+                continue;
+            }
+            if ($name === 'width' && $tag === 'col'
+                && preg_match('/^(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)%$/', $value)) {
+                $element->setAttribute($name, $value);
+
+                continue;
+            }
+            if ($name === 'alt' && $tag === 'img') {
+                $element->setAttribute('alt', $value);
+
+                continue;
+            }
             if (in_array($name, ['colspan', 'rowspan'], true) && in_array($tag, ['td', 'th'], true)
-                && ctype_digit($value) && (int) $value >= 1 && (int) $value <= 10) {
+                && ctype_digit($value) && (int) $value >= 1 && (int) $value <= 1000) {
                 $element->setAttribute($name, $value);
 
                 continue;
@@ -329,6 +961,35 @@ class ContractDocumentService
 
             $element->removeAttributeNode($attribute);
         }
+    }
+
+    private function sanitizeConvertedPdfStyle(string $tag, string $style): ?string
+    {
+        $safe = [];
+        foreach (explode(';', $style) as $declaration) {
+            if (! str_contains($declaration, ':')) {
+                continue;
+            }
+            [$property, $value] = array_map('trim', explode(':', $declaration, 2));
+            $property = strtolower($property);
+            $value = strtolower($value);
+
+            if (in_array($property, ['width', 'margin-left'], true)
+                && preg_match('/^(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)%$/', $value)
+                && ($tag === 'table' && in_array($property, ['width', 'margin-left'], true)
+                    || $tag === 'col' && $property === 'width'
+                    || $tag === 'p' && in_array($property, ['width', 'margin-left'], true))) {
+                $safe[] = $property.':'.$value;
+            } elseif ($tag === 'div' && in_array($property, ['width', 'min-height'], true)
+                && preg_match('/^[0-9]{1,5}(?:\.[0-9]+)?pt$/', $value)) {
+                $safe[] = $property.':'.$value;
+            } elseif ($property === 'text-align' && in_array($tag, ['td', 'th'], true)
+                && in_array($value, ['left', 'center', 'right'], true)) {
+                $safe[] = $property.':'.$value;
+            }
+        }
+
+        return $safe === [] ? null : implode(';', $safe);
     }
 
     private function renderWordBlock(DOMNode $node): string
@@ -508,10 +1169,16 @@ class ContractDocumentService
     private function wrapHtml(string $html): string
     {
         return '<!doctype html><html><head><meta charset="UTF-8"><style>'
-            .'@page{margin:2cm}body{font-family:DejaVu Sans,sans-serif;font-size:11pt;line-height:1.45;color:#1f2937}'
+            .'@page{margin:2cm}body{margin:0;padding:24px 12px;background:#e8eef5;font-family:DejaVu Sans,sans-serif;font-size:11pt;line-height:1.45;color:#1f2937}'
             .'p{margin:0 0 10pt}h1{font-size:20pt;margin:0 0 14pt}h2{font-size:16pt;margin:14pt 0 8pt}'
             .'h3{font-size:13pt;margin:12pt 0 6pt}table{width:100%;border-collapse:collapse;margin:10pt 0}'
-            .'th,td{border:1px solid #b7c8d5;padding:6pt;text-align:left}th{background:#edf4f8}'
+            .'th,td{border:1px solid #111;padding:3pt;text-align:left}th{background:#d3d3d3;color:#111;font-size:8pt}'
+            .'.converted-pdf-page{box-sizing:border-box;margin:0 auto 20pt;border:1px solid #d1d5db;background:#fff;box-shadow:0 2px 8px #173b5912;page-break-after:always}.converted-pdf-header{display:block;width:100%;height:auto;margin-bottom:8pt}'
+            .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:7pt;line-height:1.15;margin-top:3pt;margin-bottom:5pt}'
+            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:2pt 3pt;vertical-align:middle}'
+            .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:7pt}'
+            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold}'
+            .'.converted-pdf-table .converted-pdf-cell{background:#fff;color:#111}'
             .'header{position:fixed;top:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
             .'footer{position:fixed;bottom:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
             .'blockquote{margin:8pt 0 8pt 20pt}'

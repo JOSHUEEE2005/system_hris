@@ -12,6 +12,7 @@ class Contract extends Model
         'title',
         'original_filename',
         'storage_path',
+        'original_pdf_path',
         'mime_type',
         'file_size',
         'recipient_type',

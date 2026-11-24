@@ -175,6 +175,102 @@ class ContractController extends Controller
         return back()->with('status', 'Contract uploaded and sent to '.$this->recipientCountLabel(count($recipientIds)).'.');
     }
 
+    public function convertToEditor(Request $request, Contract $contract, ContractDocumentService $documents): RedirectResponse
+    {
+        @set_time_limit(300);
+
+        $isReconversion = $contract->content_html !== null && $contract->original_pdf_path !== null;
+        abort_unless($contract->content_html === null || $isReconversion, 422, 'This contract cannot be converted again.');
+
+        $extension = strtolower(pathinfo($contract->original_filename, PATHINFO_EXTENSION));
+        $isPdf = $contract->mime_type === 'application/pdf' || $extension === 'pdf';
+        $isSupported = $isReconversion || in_array($contract->mime_type, [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ], true) || in_array($extension, ['pdf', 'docx'], true);
+        abort_unless($isSupported, 422, 'Only PDF and Word (.docx) uploads can be converted for editing.');
+
+        $sourceStoragePath = $isReconversion ? $contract->original_pdf_path : $contract->storage_path;
+        $path = Storage::disk('local')->path($sourceStoragePath);
+        abort_unless(is_file($path), 404);
+
+        try {
+            $contentHtml = $documents->extractUploadedHtml(
+                file_get_contents($path) ?: '',
+                $isReconversion ? 'application/pdf' : $contract->mime_type,
+                $isReconversion ? 'original.pdf' : $contract->original_filename,
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+            return back()->withErrors(['contract' => $exception->getMessage()]);
+        }
+
+        $storagePath = $this->storeEditorDocument($contentHtml);
+        $oldStoragePath = $contract->storage_path;
+        $originalPdfPath = $isReconversion ? $contract->original_pdf_path : null;
+        if (! $isReconversion && $isPdf) {
+            $originalPdfPath = 'contracts/original-pdfs/'.Str::uuid().'.pdf';
+            if (! Storage::disk('local')->copy($oldStoragePath, $originalPdfPath)) {
+                throw new \RuntimeException('The original PDF could not be preserved.');
+            }
+        }
+
+        try {
+            DB::transaction(function () use ($request, $contract, $contentHtml, $storagePath, $originalPdfPath, $isReconversion): void {
+                $lockedContract = Contract::with('recipients')
+                    ->whereKey($contract->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $lockedContract->update([
+                    'original_filename' => $this->templateFilename($lockedContract->title, 'html'),
+                    'storage_path' => $storagePath,
+                    'original_pdf_path' => $originalPdfPath,
+                    'mime_type' => 'text/html',
+                    'file_size' => strlen($contentHtml),
+                    'content_html' => $contentHtml,
+                ]);
+
+                $lockedContract->recipients()->update([
+                    'status' => 'Pending',
+                    'received_at' => null,
+                ]);
+
+                $this->audit($request, 'contract.converted', $lockedContract->id, [
+                    'title' => $lockedContract->title,
+                    'result' => $isReconversion
+                        ? 'Editable contract rebuilt from the retained original PDF.'
+                        : 'Uploaded document converted to editable contract.',
+                ]);
+            });
+        } catch (Throwable $exception) {
+            if ($originalPdfPath && ! $isReconversion) {
+                Storage::disk('local')->delete($originalPdfPath);
+            }
+            if (! Storage::disk('local')->delete($storagePath)) {
+                Log::warning('Unable to remove converted contract content after the database transaction failed.', [
+                    'storage_path' => $storagePath,
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        if (! Storage::disk('local')->delete($oldStoragePath)) {
+            Log::warning('The uploaded contract was converted but the original private file could not be removed.', [
+                'storage_path' => $oldStoragePath,
+                'contract_id' => $contract->id,
+            ]);
+        }
+
+        return back()->with(
+            'status',
+            $isReconversion
+                ? 'The editable contract was rebuilt from its original PDF. Review it and resend it to recipients.'
+                : 'Contract converted to editable text. Review and edit it before sending again.',
+        );
+    }
+
     public function update(Request $request, Contract $contract, ContractDocumentService $documents): RedirectResponse
     {
         $sourceType = $request->input('contract_source', $contract->content_html !== null ? 'editor' : 'upload');
@@ -382,15 +478,24 @@ class ContractController extends Controller
     public function preview(Request $request, Contract $contract, ContractDocumentService $documents): BinaryFileResponse|Response
     {
         $this->authorizeAccess($request, $contract);
+        if ($request->boolean('original') && $contract->original_pdf_path) {
+            $originalPdfPath = Storage::disk('local')->path($contract->original_pdf_path);
+            if (is_file($originalPdfPath)) {
+                return response()->file($originalPdfPath, [
+                    'Content-Type' => 'application/pdf',
+                    'Content-Disposition' => 'inline',
+                    'X-Content-Type-Options' => 'nosniff',
+                ]);
+            }
+        }
         if ($contract->content_html !== null) {
             $recipient = $contract->recipients()->where('user_id', $request->user()->id)->exists()
                 ? $request->user()
                 : null;
             $html = $documents->personalizeHtml($contract->content_html, $recipient);
 
-            return response($documents->renderPdf($html), 200, [
-                'Content-Type' => 'application/pdf',
-                'Content-Disposition' => 'inline; filename="'.$this->templateFilename($contract->title, 'pdf').'"',
+            return response($documents->renderHtmlPreview($html), 200, [
+                'Content-Type' => 'text/html; charset=UTF-8',
                 'X-Content-Type-Options' => 'nosniff',
             ]);
         }
@@ -408,6 +513,13 @@ class ContractController extends Controller
     public function download(Request $request, Contract $contract, ContractDocumentService $documents): StreamedResponse
     {
         $this->authorizeAccess($request, $contract);
+        if ($contract->original_pdf_path && $request->boolean('original')) {
+            return Storage::disk('local')->download(
+                $contract->original_pdf_path,
+                $contract->title.'-original.pdf',
+                ['Content-Type' => 'application/pdf', 'X-Content-Type-Options' => 'nosniff'],
+            );
+        }
         if ($contract->content_html !== null) {
             $format = strtolower((string) $request->query('format', 'pdf'));
             abort_unless(in_array($format, ['pdf', 'docx'], true), 422, 'Choose PDF or Word format.');
