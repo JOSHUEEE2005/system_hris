@@ -93,16 +93,8 @@ class User extends Authenticatable
         return $this->hasOne(ContractFolder::class);
     }
 
-    public function ensurePersonalContractFolder(): ?ContractFolder
+    public function ensurePersonalContractFolder(): ContractFolder
     {
-        $isEmployeeOrIntern = $this->employee_id !== null
-            || $this->intern()->exists()
-            || $this->roles()->where('slug', 'employee')->exists();
-
-        if (! $isEmployeeOrIntern) {
-            return null;
-        }
-
         return $this->personalContractFolder()->firstOrCreate([], [
             'name' => mb_substr(trim((string) $this->name) ?: 'User '.$this->id, 0, 100),
         ]);

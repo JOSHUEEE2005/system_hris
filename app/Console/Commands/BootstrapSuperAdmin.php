@@ -61,6 +61,7 @@ class BootstrapSuperAdmin extends Command
                 'status' => 'Active',
             ]);
             $user->roles()->sync([$role->id]);
+            $user->ensurePersonalContractFolder();
         });
 
         $this->info('Super Admin account created.');
