@@ -128,6 +128,7 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('up to 35 MB')
             ->assertSee('Search employees by name, email, or department')
             ->assertSee('Jamie Rivera')
+            ->assertSee('data-personal-folder-filter="'.$recipient->id.'"', false)
             ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
             ->assertSee('Edit')
             ->assertSee('value="'.$recipient->id.'"', false)

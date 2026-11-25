@@ -51,31 +51,38 @@
                     <button class="contract-folder-filter" type="button" data-contract-folder-filter="{{ $folder->id }}" aria-pressed="false">{{ $folder->name }}</button>
                 @endforeach
             </nav>
-            @if ($personalFolders->isNotEmpty())
-                <div class="contract-personal-folder-filter">
-                    <label for="contract-personal-folder">Personal folders</label>
-                    <select id="contract-personal-folder">
-                        <option value="">All recipients</option>
-                        @foreach ($personalFolders as $folder)
-                            <option value="{{ $folder->user_id }}">{{ $folder->user?->name ?? $folder->name }}</option>
-                        @endforeach
-                    </select>
-                </div>
-            @endif
-            <p class="contract-hint">Personal folders contain each recipient’s deliveries. HR contract managers can browse them; employees and interns see only contracts assigned to them.</p>
         @elseif ($personalFolders->isNotEmpty())
             <p class="contract-personal-folder-label">Personal folder: {{ auth()->user()->name }}</p>
         @endif
 
-        @if ($contracts->isEmpty())
-            <div class="contract-empty">
-                <span class="contract-empty-icon" aria-hidden="true">▤</span>
-                <h3>{{ $canManageContracts ? 'No contracts yet' : 'Nothing has been shared with you yet' }}</h3>
-                <p>{{ $canManageContracts ? 'Add a contract to make it available in the selected employees’ portal.' : 'When HR sends you a contract, it will appear here.' }}</p>
-            </div>
-        @else
-            <div class="contract-grid" id="contract-grid">
-                @foreach ($contracts as $contract)
+        <div class="{{ $canManageContracts ? 'contract-manager-browser' : '' }}">
+            @if ($canManageContracts)
+                <aside class="contract-personal-folders">
+                    <h3>Personal folders</h3>
+                    <p>Open a recipient’s folder to view their contracts.</p>
+                    <nav class="contract-personal-folder-list" aria-label="Personal contract folders">
+                        <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="" aria-pressed="true">
+                            <span>All recipient folders</span>
+                        </button>
+                        @foreach ($personalFolders as $folder)
+                            <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
+                                <span>{{ $folder->user?->name ?? $folder->name }}</span>
+                            </button>
+                        @endforeach
+                    </nav>
+                </aside>
+            @endif
+
+            <div class="{{ $canManageContracts ? 'contract-manager-content' : '' }}">
+                @if ($contracts->isEmpty())
+                    <div class="contract-empty">
+                        <span class="contract-empty-icon" aria-hidden="true">▤</span>
+                        <h3>{{ $canManageContracts ? 'No contracts yet' : 'Nothing has been shared with you yet' }}</h3>
+                        <p>{{ $canManageContracts ? 'Add a contract to make it available in the selected employees’ portal.' : 'When HR sends you a contract, it will appear here.' }}</p>
+                    </div>
+                @else
+                    <div class="contract-grid" id="contract-grid">
+                        @foreach ($contracts as $contract)
                     @php
                         $isTemplate = $contract->content_html !== null;
                         $isPreviewable = $isTemplate || in_array($contract->mime_type, $previewableMimeTypes, true);
@@ -193,12 +200,14 @@
                             </div>
                         </div>
                     </article>
-                @endforeach
+                        @endforeach
+                    </div>
+                @endif
+                @if ($canManageContracts)
+                    <p id="contract-search-empty" class="contract-search-empty" hidden>No contracts match your search or folder selection.</p>
+                @endif
             </div>
-        @endif
-        @if ($canManageContracts)
-            <p id="contract-search-empty" class="contract-search-empty" hidden>No contracts match your search or folder selection.</p>
-        @endif
+        </div>
     </main>
 
     @if ($canManageContracts)

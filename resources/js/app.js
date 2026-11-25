@@ -440,7 +440,7 @@ const contractSearch = document.getElementById('contract-search');
 const contractCards = [...document.querySelectorAll('[data-contract-card]')];
 const noContractCardsMatch = document.getElementById('contract-search-empty');
 const contractFolderFilters = [...document.querySelectorAll('[data-contract-folder-filter]')];
-const personalContractFolderSelect = document.getElementById('contract-personal-folder');
+const personalContractFolderFilters = [...document.querySelectorAll('[data-personal-folder-filter]')];
 let selectedContractFolder = 'all';
 let selectedPersonalContractUser = '';
 
@@ -465,15 +465,18 @@ const filterContractCards = () => {
     }
 };
 
-personalContractFolderSelect?.addEventListener('change', () => {
-    selectedPersonalContractUser = personalContractFolderSelect.value;
-    if (selectedPersonalContractUser) {
+personalContractFolderFilters.forEach((button) => {
+    button.addEventListener('click', () => {
+        selectedPersonalContractUser = button.dataset.personalFolderFilter || '';
         selectedContractFolder = 'all';
         contractFolderFilters.forEach((filter) => {
             filter.setAttribute('aria-pressed', String(filter.dataset.contractFolderFilter === 'all'));
         });
-    }
-    filterContractCards();
+        personalContractFolderFilters.forEach((folderFilter) => {
+            folderFilter.setAttribute('aria-pressed', String(folderFilter === button));
+        });
+        filterContractCards();
+    });
 });
 
 contractSearch?.addEventListener('input', filterContractCards);
@@ -481,9 +484,9 @@ contractFolderFilters.forEach((button) => {
     button.addEventListener('click', () => {
         selectedContractFolder = button.dataset.contractFolderFilter || 'all';
         selectedPersonalContractUser = '';
-        if (personalContractFolderSelect instanceof HTMLSelectElement) {
-            personalContractFolderSelect.value = '';
-        }
+        personalContractFolderFilters.forEach((folderFilter) => {
+            folderFilter.setAttribute('aria-pressed', String(folderFilter.dataset.personalFolderFilter === ''));
+        });
         contractFolderFilters.forEach((filter) => {
             filter.setAttribute('aria-pressed', String(filter === button));
         });
