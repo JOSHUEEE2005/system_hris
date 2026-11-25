@@ -171,6 +171,7 @@ class AdminController extends Controller
                 'status' => 'Active',
                 'email_verified_at' => now(),
             ]);
+            $user->ensurePersonalContractFolder();
             $onboarding->update([
                 'status' => 'Approved',
                 'reviewed_by' => $request->user()->id,
@@ -242,6 +243,7 @@ class AdminController extends Controller
                 'email_verified_at' => now(),
             ]);
             $user->roles()->sync([$data['role_id']]);
+            $user->ensurePersonalContractFolder();
 
             return $user;
         });
@@ -389,6 +391,7 @@ class AdminController extends Controller
                 $profile->update(['user_id' => $user->id]);
             }
             $user->roles()->sync([$data['role_id']]);
+            $user->ensurePersonalContractFolder();
 
             $this->audit($request, $isEmployee ? 'employee.created' : 'intern.created', $isEmployee ? 'employee' : 'intern', $profile->id);
             $this->audit($request, 'user.created', 'user', $user->id);

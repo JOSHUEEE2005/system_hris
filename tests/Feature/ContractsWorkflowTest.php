@@ -31,11 +31,13 @@ class ContractsWorkflowTest extends TestCase
     public function test_pdf_conversion_sanitizer_preserves_large_table_spans(): void
     {
         $html = app(ContractDocumentService::class)->sanitizeHtml(
-            '<table><tbody><tr><th colspan="11" rowspan="13">Merged section</th></tr></tbody></table>',
+            '<table><tbody><tr><th colspan="11" rowspan="13">Merged section</th></tr>'
+            .'<tr class="converted-pdf-separator-row"><td>Separator</td></tr></tbody></table>',
         );
 
         $this->assertStringContainsString('colspan="11"', $html);
         $this->assertStringContainsString('rowspan="13"', $html);
+        $this->assertStringContainsString('converted-pdf-separator-row', $html);
     }
 
     public function test_pdf_export_converts_legacy_png_images_when_gd_is_unavailable(): void
@@ -52,8 +54,10 @@ class ContractsWorkflowTest extends TestCase
 
     public function test_word_export_preserves_colspan_and_rowspan(): void
     {
-        $html = '<table><tbody>'
-            .'<tr><td rowspan="2" colspan="2">Merged</td><td>Right</td></tr>'
+        $html = '<table style="width:75%;margin-left:20%"><colgroup>'
+            .'<col style="width:25%"><col style="width:25%"><col style="width:50%">'
+            .'</colgroup><tbody>'
+            .'<tr style="height:12pt"><td rowspan="2" colspan="2">Merged</td><td>☐</td></tr>'
             .'<tr><td>Below</td></tr>'
             .'</tbody></table>';
 
@@ -71,6 +75,16 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('<w:gridSpan w:val="2"/>', $documentXml);
         $this->assertStringContainsString('<w:vMerge w:val="restart"/>', $documentXml);
         $this->assertStringContainsString('w:type="dxa"', $documentXml);
+        $this->assertStringContainsString('<w:tblW w:w="6750" w:type="dxa"/>', $documentXml);
+        $this->assertStringContainsString('<w:tblInd w:w="941" w:type="dxa"/>', $documentXml);
+        $this->assertStringContainsString('<w:tcW w:w="3374" w:type="dxa"/><w:gridSpan w:val="2"/>', $documentXml);
+        $this->assertStringContainsString('<w:trHeight w:val="240" w:hRule="atLeast"/>', $documentXml);
+        $this->assertStringContainsString("\u{2610}", $documentXml);
+        $this->assertStringContainsString('<w:jc w:val="center"/>', $documentXml);
+        $this->assertStringContainsString(
+            '<w:rFonts w:ascii="Segoe UI Symbol" w:hAnsi="Segoe UI Symbol"/>',
+            $documentXml,
+        );
         $this->assertGreaterThanOrEqual(
             2,
             substr_count($documentXml, '<w:vMerge'),
@@ -93,6 +107,10 @@ class ContractsWorkflowTest extends TestCase
             ->assertSessionHas('status', 'Contract uploaded and sent to 1 recipient.');
 
         $contract = Contract::with('recipients')->firstOrFail();
+        $this->assertDatabaseHas('contract_folders', [
+            'user_id' => $recipient->id,
+            'name' => 'Jamie Rivera',
+        ]);
         Storage::disk('local')->assertExists($contract->storage_path);
         $this->assertSame('agreement.docx', $contract->original_filename);
         $this->assertSame('individual', $contract->recipient_type);
@@ -110,7 +128,9 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('up to 35 MB')
             ->assertSee('Search employees by name, email, or department')
             ->assertSee('Jamie Rivera')
+            ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
             ->assertSee('Edit')
+            ->assertSee('value="'.$recipient->id.'"', false)
             ->assertSee('Notifications')
             ->assertSee('Profile')
             ->assertSee('HR Manager')
@@ -119,7 +139,8 @@ class ContractsWorkflowTest extends TestCase
         $this->actingAs($recipient)->get(route('admin.contracts'))
             ->assertOk()
             ->assertSee('Employment agreement')
-            ->assertSee('agreement.docx');
+            ->assertSee('agreement.docx')
+            ->assertSee('Personal folder: Jamie Rivera');
         $this->actingAs($recipient)->get(route('admin.contracts.download', $contract))
             ->assertDownload('agreement.docx');
         $this->actingAs($otherUser)->get(route('admin.contracts.download', $contract))->assertForbidden();
@@ -162,6 +183,14 @@ class ContractsWorkflowTest extends TestCase
             [$firstRecipient->id, $secondRecipient->id],
             $contract->recipients->pluck('user_id')->all(),
         );
+        $this->assertDatabaseHas('contract_folders', ['user_id' => $firstRecipient->id]);
+        $this->assertDatabaseHas('contract_folders', ['user_id' => $secondRecipient->id]);
+        foreach ([$firstRecipient, $secondRecipient] as $recipient) {
+            $this->actingAs($recipient)->get(route('admin.contracts'))
+                ->assertOk()
+                ->assertSee('Department policy')
+                ->assertSee('Personal folder: '.$recipient->name);
+        }
         $this->assertDatabaseMissing('contract_recipients', [
             'contract_id' => $contract->id,
             'user_id' => $outsideRecipient->id,
@@ -215,6 +244,28 @@ class ContractsWorkflowTest extends TestCase
         ])->assertRedirect();
 
         $this->assertNull($contract->fresh()->folder_id);
+    }
+
+    public function test_hr_created_employee_accounts_get_a_personal_contract_folder(): void
+    {
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $employeeRole = Role::where('slug', 'employee')->firstOrFail();
+
+        $this->actingAs($hr)->post(route('admin.users.store'), [
+            'name' => 'Maddie Perez',
+            'email' => 'maddie@example.com',
+            'password' => 'StrongPass123!',
+            'password_confirmation' => 'StrongPass123!',
+            'role_id' => $employeeRole->id,
+            'status' => 'Active',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'User account created.');
+
+        $maddie = User::where('email', 'maddie@example.com')->firstOrFail();
+        $this->assertDatabaseHas('contract_folders', [
+            'user_id' => $maddie->id,
+            'name' => 'Maddie Perez',
+        ]);
     }
 
     public function test_hr_can_convert_an_uploaded_docx_into_the_contract_editor(): void
@@ -626,6 +677,7 @@ class ContractsWorkflowTest extends TestCase
             'status' => 'Active',
         ]);
         $user->roles()->attach(Role::where('slug', $roleSlug)->firstOrFail());
+        $user->ensurePersonalContractFolder();
 
         return $user;
     }

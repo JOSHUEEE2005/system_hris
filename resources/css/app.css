@@ -484,6 +484,20 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
     font-weight: 700;
 }
 .contract-folder-filter[aria-pressed="true"] { border-color: var(--navy); background: #e8f2f8; color: var(--navy); }
+.contract-personal-folder-filter { display: flex; max-width: 380px; align-items: center; gap: 10px; margin: 0 0 8px; }
+.contract-personal-folder-filter label { color: #42647e; font-size: 10px; font-weight: 700; }
+.contract-personal-folder-filter select {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #d5e0e8;
+    border-radius: 8px;
+    background: #fff;
+    padding: 7px 10px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 11px;
+}
+.contract-personal-folder-label { margin: 0 0 10px; color: var(--navy); font-size: 12px; font-weight: 700; }
 .contract-folder-error { margin: -5px 0 10px; color: #991b1b; font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .contract-search {

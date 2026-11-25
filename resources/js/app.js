@@ -440,7 +440,9 @@ const contractSearch = document.getElementById('contract-search');
 const contractCards = [...document.querySelectorAll('[data-contract-card]')];
 const noContractCardsMatch = document.getElementById('contract-search-empty');
 const contractFolderFilters = [...document.querySelectorAll('[data-contract-folder-filter]')];
+const personalContractFolderSelect = document.getElementById('contract-personal-folder');
 let selectedContractFolder = 'all';
+let selectedPersonalContractUser = '';
 
 const filterContractCards = () => {
     const query = contractSearch instanceof HTMLInputElement ? contractSearch.value.trim().toLowerCase() : '';
@@ -451,7 +453,10 @@ const filterContractCards = () => {
         const matchesFolder = selectedContractFolder === 'all'
             || (selectedContractFolder === 'unfiled' && !card.dataset.folderId)
             || card.dataset.folderId === selectedContractFolder;
-        card.hidden = !matchesSearch || !matchesFolder;
+        const recipientUserIds = (card.dataset.recipientUserIds || '').split(',');
+        const matchesPersonalFolder = !selectedPersonalContractUser
+            || recipientUserIds.includes(selectedPersonalContractUser);
+        card.hidden = !matchesSearch || !matchesFolder || !matchesPersonalFolder;
         if (!card.hidden) visibleCount++;
     });
 
@@ -460,10 +465,25 @@ const filterContractCards = () => {
     }
 };
 
+personalContractFolderSelect?.addEventListener('change', () => {
+    selectedPersonalContractUser = personalContractFolderSelect.value;
+    if (selectedPersonalContractUser) {
+        selectedContractFolder = 'all';
+        contractFolderFilters.forEach((filter) => {
+            filter.setAttribute('aria-pressed', String(filter.dataset.contractFolderFilter === 'all'));
+        });
+    }
+    filterContractCards();
+});
+
 contractSearch?.addEventListener('input', filterContractCards);
 contractFolderFilters.forEach((button) => {
     button.addEventListener('click', () => {
         selectedContractFolder = button.dataset.contractFolderFilter || 'all';
+        selectedPersonalContractUser = '';
+        if (personalContractFolderSelect instanceof HTMLSelectElement) {
+            personalContractFolderSelect.value = '';
+        }
         contractFolderFilters.forEach((filter) => {
             filter.setAttribute('aria-pressed', String(filter === button));
         });

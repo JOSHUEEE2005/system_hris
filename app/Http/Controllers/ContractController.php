@@ -37,6 +37,7 @@ class ContractController extends Controller
     public function index(Request $request, ContractDocumentService $documents): View
     {
         $viewer = $request->user();
+        $viewer->ensurePersonalContractFolder();
         $canManageContracts = $viewer->hasPermission('contracts.manage');
         $contracts = Contract::with(['department', 'createdBy'])->latest('sent_at');
 
@@ -56,8 +57,11 @@ class ContractController extends Controller
                 ? Department::orderBy('department_name')->get()
                 : collect(),
             'folders' => $canManageContracts
-                ? ContractFolder::orderBy('name')->get()
+                ? ContractFolder::whereNull('user_id')->orderBy('name')->get()
                 : collect(),
+            'personalFolders' => $canManageContracts
+                ? ContractFolder::with('user')->whereNotNull('user_id')->orderBy('name')->get()
+                : $viewer->personalContractFolder()->get(),
             'recipients' => $canManageContracts
                 ? $this->recipientCandidateQuery()->with(['department', 'employee.department', 'intern.department'])->orderBy('name')->get()
                 : collect(),
@@ -71,7 +75,12 @@ class ContractController extends Controller
     public function storeFolder(Request $request): RedirectResponse
     {
         $data = $request->validateWithBag('folder', [
-            'name' => ['required', 'string', 'max:100', Rule::unique('contract_folders', 'name')],
+            'name' => [
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('contract_folders', 'name')->whereNull('user_id'),
+            ],
         ]);
 
         ContractFolder::create([
@@ -96,7 +105,7 @@ class ContractController extends Controller
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
-            'folder_id' => ['nullable', 'integer', 'exists:contract_folders,id'],
+            'folder_id' => ['nullable', 'integer', Rule::exists('contract_folders', 'id')->whereNull('user_id')],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
             'recipient_ids.*' => [
                 'required',
@@ -286,7 +295,7 @@ class ContractController extends Controller
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
             'recipient_type' => ['required', Rule::in(['department', 'individual'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
-            'folder_id' => ['nullable', 'integer', 'exists:contract_folders,id'],
+            'folder_id' => ['nullable', 'integer', Rule::exists('contract_folders', 'id')->whereNull('user_id')],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
             'recipient_ids.*' => [
                 'required',

@@ -85,6 +85,7 @@ class RegistrationController extends Controller
                 'email_verified_at' => $isAutoAccount ? now() : null,
             ]);
             $user->roles()->sync([$role->id]);
+            $user->ensurePersonalContractFolder();
             if ($isAutoAccount && $department) {
                 [$firstName, $lastName] = $this->splitName($validated['name']);
                 $departmentRecord = Department::firstOrCreate(['department_name' => $department]);

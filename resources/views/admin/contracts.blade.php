@@ -51,7 +51,20 @@
                     <button class="contract-folder-filter" type="button" data-contract-folder-filter="{{ $folder->id }}" aria-pressed="false">{{ $folder->name }}</button>
                 @endforeach
             </nav>
-            <p class="contract-hint">Folders are shared with HR managers. Files remain private and visible only to assigned recipients.</p>
+            @if ($personalFolders->isNotEmpty())
+                <div class="contract-personal-folder-filter">
+                    <label for="contract-personal-folder">Personal folders</label>
+                    <select id="contract-personal-folder">
+                        <option value="">All recipients</option>
+                        @foreach ($personalFolders as $folder)
+                            <option value="{{ $folder->user_id }}">{{ $folder->user?->name ?? $folder->name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            @endif
+            <p class="contract-hint">Personal folders contain each recipient’s deliveries. HR contract managers can browse them; employees and interns see only contracts assigned to them.</p>
+        @elseif ($personalFolders->isNotEmpty())
+            <p class="contract-personal-folder-label">Personal folder: {{ auth()->user()->name }}</p>
         @endif
 
         @if ($contracts->isEmpty())
@@ -75,6 +88,7 @@
                         class="contract-card"
                         data-contract-card
                         data-folder-id="{{ $contract->folder_id ?? '' }}"
+                        data-recipient-user-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
                     >
                         <div class="contract-preview">

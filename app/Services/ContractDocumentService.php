@@ -29,10 +29,12 @@ class ContractDocumentService
         'converted-pdf-text',
         'converted-pdf-table',
         'converted-pdf-section-row',
+        'converted-pdf-separator-row',
         'converted-pdf-header-row',
         'converted-pdf-section-cell',
         'converted-pdf-heading-cell',
         'converted-pdf-cell',
+        'converted-pdf-checkbox-cell',
     ];
 
     public function sanitizeHtml(string $html): string
@@ -158,28 +160,170 @@ class ContractDocumentService
 
         $script = <<<'PY'
 import base64, json, sys
+from collections import Counter
+from statistics import median
 import pymupdf
 
 document = pymupdf.open(sys.argv[1])
 pages = []
 for page in document:
     found = page.find_tables()
+    drawings = page.get_drawings()
+    images = page.get_image_info(xrefs=True)
+    small_image_counts = Counter(
+        image["xref"]
+        for image in images
+        if image.get("xref")
+        and image["bbox"][2] - image["bbox"][0] <= 12
+        and image["bbox"][3] - image["bbox"][1] <= 12
+    )
+    checkbox_images = [
+        image for image in images
+        if image.get("xref")
+        and small_image_counts[image["xref"]] >= 3
+        and 0.6 <= (image["bbox"][2] - image["bbox"][0]) / max(1, image["bbox"][3] - image["bbox"][1]) <= 1.4
+        and image["bbox"][2] - image["bbox"][0] <= 12
+        and image["bbox"][3] - image["bbox"][1] <= 12
+    ]
     tables = []
     for table in found.tables:
+        bbox = list(table.bbox)
+        vertical_segments = []
+        horizontal_segments = []
+        # Use drawn borders when the table detector omits empty outer columns.
+        for drawing in drawings:
+            for item in drawing["items"]:
+                if item[0] != "re":
+                    continue
+                rect = item[1]
+                if rect.width <= 2 and rect.height >= 2:
+                    top = max(bbox[1] - 4, rect.y0)
+                    bottom = min(bbox[3] + 4, rect.y1)
+                    if bottom > top:
+                        vertical_segments.append(((rect.x0 + rect.x1) / 2, top, bottom))
+                elif rect.height <= 2 and rect.width >= 2:
+                    y = (rect.y0 + rect.y1) / 2
+                    if abs(y - bbox[1]) <= 8 or abs(y - bbox[3]) <= 8:
+                        horizontal_segments.append((y, rect.x0, rect.x1))
+
+        vertical_clusters = []
+        for x, top, bottom in sorted(vertical_segments):
+            if not vertical_clusters or x - vertical_clusters[-1][0] > 2:
+                vertical_clusters.append([x, [(top, bottom)]])
+            else:
+                vertical_clusters[-1][1].append((top, bottom))
+
+        columns = []
+        for x, segments in vertical_clusters:
+            covered = 0
+            last_bottom = None
+            for top, bottom in sorted(segments):
+                if last_bottom is None or top > last_bottom + 2:
+                    covered += bottom - top
+                elif bottom > last_bottom:
+                    covered += bottom - last_bottom
+                last_bottom = max(last_bottom or bottom, bottom)
+            if covered >= max(6, min(12, (bbox[3] - bbox[1]) * 0.15)):
+                columns.append(x)
+
+        horizontal_clusters = []
+        for y, left, right in sorted(horizontal_segments):
+            if not horizontal_clusters or y - horizontal_clusters[-1][0] > 2:
+                horizontal_clusters.append([y, [(left, right)]])
+            else:
+                horizontal_clusters[-1][1].append((left, right))
+
+        row_boundaries = []
+        left_edge = columns[0] if len(columns) >= 2 else bbox[0]
+        right_edge = columns[-1] if len(columns) >= 2 else bbox[2]
+        for y, segments in horizontal_clusters:
+            intervals = sorted((max(left_edge, left), min(right_edge, right)) for left, right in segments)
+            covered = 0
+            last_right = None
+            for left, right in intervals:
+                if right <= left:
+                    continue
+                if last_right is None or left > last_right:
+                    covered += right - left
+                elif right > last_right:
+                    covered += right - last_right
+                last_right = max(last_right or right, right)
+            if covered >= (right_edge - left_edge) * 0.75:
+                row_boundaries.append(y)
+
+        if len(columns) >= 2:
+            bbox[0] = columns[0]
+            bbox[2] = columns[-1]
+        above = [y for y in row_boundaries if 0 <= bbox[1] - y <= 8]
+        below = [y for y in row_boundaries if 0 <= y - bbox[3] <= 8]
+        if above:
+            bbox[1] = max(above)
+        if below:
+            bbox[3] = min(below)
+
+        blue_segments = []
+        for drawing in drawings:
+            fill = drawing.get("fill")
+            rect = drawing["rect"]
+            if fill and all(abs(actual - expected) < 0.01 for actual, expected in zip(fill, (0.122, 0.22, 0.388))) \
+                    and 2 <= rect.height <= 8 and rect.y1 >= bbox[1] and rect.y0 <= bbox[3]:
+                blue_segments.append(((rect.y0 + rect.y1) / 2, rect.x0, rect.x1))
+
+        blue_clusters = []
+        for y, left, right in sorted(blue_segments):
+            if not blue_clusters or y - blue_clusters[-1][0] > 1:
+                blue_clusters.append([y, [(left, right)]])
+            else:
+                blue_clusters[-1][1].append((left, right))
+
+        blue_bands = []
+        for y, segments in blue_clusters:
+            intervals = sorted((max(bbox[0], left), min(bbox[2], right)) for left, right in segments)
+            covered = 0
+            last_right = None
+            for left, right in intervals:
+                if right <= left:
+                    continue
+                if last_right is None or left > last_right:
+                    covered += right - left
+                elif right > last_right:
+                    covered += right - last_right
+                last_right = max(last_right or right, right)
+            if covered >= (bbox[2] - bbox[0]) * 0.75:
+                blue_bands.append((y, y))
+
         extracted = table.extract()
         rows = []
+        blue_separator_rows = []
         for row_index, row in enumerate(table.rows):
             cells = []
+            cell_rectangles = []
             for column_index, cell in enumerate(row.cells):
                 if cell is None:
                     cells.append(None)
                     continue
-                text = page.get_textbox(pymupdf.Rect(cell)).strip()
+                cell_rect = pymupdf.Rect(cell)
+                cell_rectangles.append(cell_rect)
+                text = page.get_textbox(cell_rect).strip()
                 if not text and row_index < len(extracted) and column_index < len(extracted[row_index]):
                     text = extracted[row_index][column_index] or ""
+                for image in checkbox_images:
+                    image_rect = pymupdf.Rect(image["bbox"])
+                    image_center = pymupdf.Point(
+                        image_rect.x0 + image_rect.width / 2,
+                        image_rect.y0 + image_rect.height / 2,
+                    )
+                    if cell_rect.contains(image_center):
+                        # Repeated small images in table cells are checkbox marks.
+                        text = (text + " ☐").strip()
                 cells.append({"rect": list(cell), "text": text})
             rows.append(cells)
-        tables.append({"bbox": list(table.bbox), "rows": rows})
+            if cell_rectangles:
+                row_top = median(rect.y0 for rect in cell_rectangles)
+                row_height = median(rect.height for rect in cell_rectangles)
+                if row_height <= 8 and any(row_top <= band[1] + 1 and row_top + row_height >= band[0] - 1 for band in blue_bands):
+                    blue_separator_rows.append(row_index)
+        tables.append({"bbox": bbox, "columns": columns, "rows": rows, "blue_separator_rows": blue_separator_rows})
 
     table_boxes = [pymupdf.Rect(table["bbox"]) for table in tables]
     blocks = []
@@ -311,12 +455,15 @@ PY;
             return '';
         }
 
-        $xBoundaries = [(float) $box[0], (float) $box[2]];
-        foreach ($rows as $row) {
-            foreach ($row as $cell) {
-                if (is_array($cell) && isset($cell['rect'])) {
-                    $xBoundaries[] = (float) $cell['rect'][0];
-                    $xBoundaries[] = (float) $cell['rect'][2];
+        $xBoundaries = array_values(array_filter($table['columns'] ?? [], 'is_numeric'));
+        if (count($xBoundaries) < 2) {
+            $xBoundaries = [(float) $box[0], (float) $box[2]];
+            foreach ($rows as $row) {
+                foreach ($row as $cell) {
+                    if (is_array($cell) && isset($cell['rect'])) {
+                        $xBoundaries[] = (float) $cell['rect'][0];
+                        $xBoundaries[] = (float) $cell['rect'][2];
+                    }
                 }
             }
         }
@@ -340,17 +487,53 @@ PY;
         $html .= '</colgroup><tbody>';
         $occupied = [];
         $rowTops = [];
+        $rowHeights = [];
+        $rowTexts = [];
         foreach ($rows as $row) {
             $tops = [];
+            $heights = [];
+            $texts = [];
             foreach ($row as $cell) {
                 if (is_array($cell) && isset($cell['rect'])) {
                     $tops[] = (float) $cell['rect'][1];
+                    $heights[] = max(0, (float) $cell['rect'][3] - (float) $cell['rect'][1]);
+                    $texts[] = trim((string) ($cell['text'] ?? ''));
                 }
             }
             $rowTops[] = $tops === [] ? null : min($tops);
+            sort($heights, SORT_NUMERIC);
+            $heightCount = count($heights);
+            $middle = intdiv($heightCount, 2);
+            $rowHeights[] = $heightCount === 0
+                ? 0
+                : ($heightCount % 2 === 1
+                    ? $heights[$middle]
+                    : ($heights[$middle - 1] + $heights[$middle]) / 2);
+            $rowTexts[] = trim(implode('', $texts));
+        }
+
+        $skipRows = [];
+        for ($rowIndex = 1; $rowIndex < count($rows) - 1; $rowIndex++) {
+            if ($rowTexts[$rowIndex] !== ''
+                || $rowTops[$rowIndex] === null
+                || $rowTops[$rowIndex - 1] === null
+                || $rowTops[$rowIndex + 1] === null) {
+                continue;
+            }
+
+            $previousBottom = $rowTops[$rowIndex - 1] + $rowHeights[$rowIndex - 1];
+            $currentBottom = $rowTops[$rowIndex] + $rowHeights[$rowIndex];
+            $nextBottom = $rowTops[$rowIndex + 1] + $rowHeights[$rowIndex + 1];
+            if ($rowTops[$rowIndex] < $previousBottom - 1
+                && $currentBottom >= $nextBottom - 1) {
+                $skipRows[$rowIndex] = true;
+            }
         }
 
         foreach ($rows as $rowIndex => $row) {
+            if (isset($skipRows[$rowIndex])) {
+                continue;
+            }
             $texts = array_map(fn ($cell): string => is_array($cell) ? trim((string) ($cell['text'] ?? '')) : '', $row);
             $rowCells = array_values(array_filter($row, 'is_array'));
             $isSection = count($rowCells) === 1
@@ -358,46 +541,56 @@ PY;
             $isHeader = count(array_filter($texts, fn (string $text): bool => in_array(strtoupper(trim($text)), [
                 'STATUS', 'DESCRIPTION', 'ORGANIZATION', 'RESPONSIBILITY', 'REMARKS',
             ], true))) >= 3;
-            $rowClass = $isSection ? ' class="converted-pdf-section-row"' : ($isHeader ? ' class="converted-pdf-header-row"' : '');
-            $html .= '<tr'.$rowClass.'>';
+            $isBlueSeparator = in_array($rowIndex, $table['blue_separator_rows'] ?? [], true);
+            $rowClass = $isSection
+                ? ' class="converted-pdf-section-row"'
+                : ($isHeader
+                    ? ' class="converted-pdf-header-row"'
+                    : ($isBlueSeparator ? ' class="converted-pdf-separator-row"' : ''));
+            $rowHeight = number_format($rowHeights[$rowIndex], 2, '.', '');
+            // Account for cell padding and the shared collapsed border added by Dompdf.
+            $cellHeight = number_format(max(0.1, $rowHeights[$rowIndex] - 2.75), 2, '.', '');
+            $html .= '<tr'.$rowClass.' style="height:'.$rowHeight.'pt">';
             $column = 0;
 
-            foreach ($row as $cellIndex => $cell) {
-                while (isset($occupied[$rowIndex][$column])) {
-                    $column++;
-                }
+            foreach ($row as $cell) {
                 if (! is_array($cell) || ! isset($cell['rect'])) {
-                    $column++;
                     continue;
                 }
 
                 $rect = $cell['rect'];
-                $start = 0;
-                foreach ($xBoundaries as $boundaryIndex => $boundary) {
-                    if (abs($boundary - (float) $rect[0]) <= 1.0) {
-                        $start = $boundaryIndex;
-                        break;
-                    }
-                }
-                $end = $start + 1;
-                foreach ($xBoundaries as $boundaryIndex => $boundary) {
-                    if ($boundaryIndex > $start && abs($boundary - (float) $rect[2]) <= 1.0) {
-                        $end = $boundaryIndex;
-                        break;
-                    }
+                $start = $this->nearestPdfColumnBoundary($xBoundaries, (float) $rect[0]);
+                $end = $this->nearestPdfColumnBoundary($xBoundaries, (float) $rect[2]);
+                if ($end <= $start) {
+                    $end = min($columnCount, $start + 1);
                 }
                 $colspan = max(1, $end - $start);
-                while ($column < $start || isset($occupied[$rowIndex][$column])) {
+                while ($column < $start) {
+                    if (! isset($occupied[$rowIndex][$column])) {
+                        $html .= '<td class="converted-pdf-cell" style="height:'.$cellHeight.'pt"></td>';
+                    }
                     $column++;
+                }
+                while (isset($occupied[$rowIndex][$column])) {
+                    $column++;
+                }
+                if ($column > $start) {
+                    $start = $column;
+                    $colspan = max(1, min($colspan, $columnCount - $start));
                 }
                 $rowspan = 1;
                 $rowBottom = (float) $rect[3];
+                $spanRows = [];
                 for ($nextRow = $rowIndex + 1; $nextRow < count($rows); $nextRow++) {
+                    if (isset($skipRows[$nextRow])) {
+                        continue;
+                    }
                     $nextTop = $rowTops[$nextRow] ?? null;
                     if ($nextTop === null || $nextTop >= $rowBottom - 1.0) {
                         break;
                     }
                     $rowspan++;
+                    $spanRows[] = $nextRow;
                 }
 
                 $class = $isSection ? 'converted-pdf-section-cell' : ($isHeader ? 'converted-pdf-heading-cell' : 'converted-pdf-cell');
@@ -406,8 +599,11 @@ PY;
                     .($rowspan > 1 ? ' rowspan="'.$rowspan.'"' : '');
                 $text = trim((string) ($cell['text'] ?? ''));
                 $text = str_replace(["\u{e71f}", ''], '☐', $text);
+                $hasCheckbox = str_contains($text, "\u{2610}");
                 $escapedText = nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
-                $html .= '<'.$tag.' class="'.$class.'"'.$spanAttrs.'>'.$escapedText.'</'.$tag.'>';
+                $class = $hasCheckbox ? 'converted-pdf-checkbox-cell' : $class;
+                $cellStyle = ' style="height:'.$cellHeight.'pt'.($hasCheckbox ? ';text-align:center' : '').'"';
+                $html .= '<'.$tag.' class="'.$class.'"'.$spanAttrs.$cellStyle.'>'.$escapedText.'</'.$tag.'>';
 
                 for ($spanColumn = $column; $spanColumn < $column + $colspan; $spanColumn++) {
                     for ($spanRow = $rowIndex + 1; $spanRow < $rowIndex + $rowspan; $spanRow++) {
@@ -416,10 +612,31 @@ PY;
                 }
                 $column += $colspan;
             }
+            while ($column < $columnCount) {
+                if (! isset($occupied[$rowIndex][$column])) {
+                    $html .= '<td class="converted-pdf-cell" style="height:'.$cellHeight.'pt"></td>';
+                }
+                $column++;
+            }
             $html .= '</tr>';
         }
 
         return $html.'</tbody></table>';
+    }
+
+    private function nearestPdfColumnBoundary(array $boundaries, float $x): int
+    {
+        $nearest = 0;
+        $distance = INF;
+        foreach ($boundaries as $index => $boundary) {
+            $candidateDistance = abs((float) $boundary - $x);
+            if ($candidateDistance < $distance) {
+                $nearest = $index;
+                $distance = $candidateDistance;
+            }
+        }
+
+        return $nearest;
     }
 
     public function personalizeHtml(string $html, ?User $recipient): string
@@ -623,10 +840,12 @@ PY;
             .'p{margin:0 0 10pt}.converted-pdf-page{box-sizing:border-box;width:'.$width.';min-height:0!important;margin:0;border:0;background:#fff;page-break-inside:auto}'
             .'.converted-pdf-header{display:block;width:100%;height:auto;margin:0}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:6pt;line-height:1.1;margin-top:0;margin-bottom:12pt}'
-            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;vertical-align:middle}'
+            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:6pt}'
-            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold}'
+            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold;text-align:left}'
+            .'.converted-pdf-table .converted-pdf-checkbox-cell{font-family:DejaVu Sans,sans-serif;font-size:9pt;line-height:1;text-align:center}'
             .'.converted-pdf-table .converted-pdf-cell{background:#fff;color:#111}'
+            .'.converted-pdf-table .converted-pdf-separator-row td{background:#1f3863;color:#1f3863}'
             .'.converted-pdf-text{margin-top:2pt;margin-bottom:4pt;font-size:10pt;line-height:1.25;white-space:normal}'
             .'.converted-pdf-page-break{height:0;page-break-before:always}'
             .'</style></head><body>'.$html.'</body></html>';
@@ -983,6 +1202,12 @@ PY;
             } elseif ($tag === 'div' && in_array($property, ['width', 'min-height'], true)
                 && preg_match('/^[0-9]{1,5}(?:\.[0-9]+)?pt$/', $value)) {
                 $safe[] = $property.':'.$value;
+            } elseif ($tag === 'tr' && $property === 'height'
+                && preg_match('/^[0-9]{1,3}(?:\.[0-9]+)?pt$/', $value)) {
+                $safe[] = $property.':'.$value;
+            } elseif (in_array($tag, ['td', 'th'], true) && $property === 'height'
+                && preg_match('/^[0-9]{1,3}(?:\.[0-9]+)?pt$/', $value)) {
+                $safe[] = $property.':'.$value;
             } elseif ($property === 'text-align' && in_array($tag, ['td', 'th'], true)
                 && in_array($value, ['left', 'center', 'right'], true)) {
                 $safe[] = $property.':'.$value;
@@ -1066,6 +1291,17 @@ PY;
             $columnCount = max($columnCount, $rowColumnCount);
         }
 
+        $tableWidthPercent = 100.0;
+        $marginLeftPercent = 0.0;
+        if (preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $table->getAttribute('style'), $widthMatch)) {
+            $tableWidthPercent = min(100, max(0.1, (float) $widthMatch[1]));
+        }
+        if (preg_match('/(?:^|;)\s*margin-left\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $table->getAttribute('style'), $marginMatch)) {
+            $marginLeftPercent = min(100, max(0, (float) $marginMatch[1]));
+        }
+        $tableWidth = max(1, (int) round(9000 * $tableWidthPercent / 100));
+        $tableIndent = max(0, (int) round(11906 * $marginLeftPercent / 100) - 1440);
+
         $gridColumns = '';
         $columnWidths = [];
         foreach ($table->getElementsByTagName('col') as $col) {
@@ -1078,12 +1314,17 @@ PY;
         }
         $widthTotal = array_sum($columnWidths);
         $resolvedColumnWidths = [];
+        $allocatedWidth = 0;
         for ($column = 0; $column < $columnCount; $column++) {
-            if (count($columnWidths) === $columnCount && $widthTotal > 0) {
-                $columnWidth = (int) round(($columnWidths[$column] / $widthTotal) * 9000);
+            if ($column === $columnCount - 1) {
+                $columnWidth = $tableWidth - $allocatedWidth;
+            } elseif (count($columnWidths) === $columnCount && $widthTotal > 0) {
+                $columnWidth = (int) floor(($columnWidths[$column] / $widthTotal) * $tableWidth);
             } else {
-                $columnWidth = (int) floor(9000 / $columnCount);
+                $columnWidth = (int) floor($tableWidth / $columnCount);
             }
+            $columnWidth = max(1, $columnWidth);
+            $allocatedWidth += $columnWidth;
             $resolvedColumnWidths[$column] = $columnWidth;
             $gridColumns .= '<w:gridCol w:w="'.$columnWidth.'"/>';
         }
@@ -1094,7 +1335,9 @@ PY;
             $wordRows .= $this->renderWordRow($row, $rowIndex, $columnCount, $occupied, $resolvedColumnWidths);
         }
 
-        return '<w:tbl><w:tblPr><w:tblW w:w="100" w:type="pct"/><w:tblLayout w:type="fixed"/><w:tblBorders>'
+        return '<w:tbl><w:tblPr><w:tblW w:w="'.$tableWidth.'" w:type="dxa"/>'
+            .($tableIndent > 0 ? '<w:tblInd w:w="'.$tableIndent.'" w:type="dxa"/>' : '')
+            .'<w:tblLayout w:type="fixed"/><w:tblBorders>'
             .'<w:top w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:left w:val="single" w:sz="4" w:color="B7C8D5"/>'
             .'<w:bottom w:val="single" w:sz="4" w:color="B7C8D5"/>'
@@ -1130,8 +1373,13 @@ PY;
 
             $cell = $sourceCells[$sourceIndex++];
             $content = '';
-            foreach ($cell->childNodes as $child) {
-                $content .= $this->renderWordBlock($child);
+            if (preg_match('/^\s*\x{2610}\s*$/u', $cell->textContent) === 1) {
+                $content = '<w:p><w:pPr><w:jc w:val="center"/></w:pPr>'
+                    .$this->renderWordInline($cell).'</w:p>';
+            } else {
+                foreach ($cell->childNodes as $child) {
+                    $content .= $this->renderWordBlock($child);
+                }
             }
             if ($content === '') {
                 $content = '<w:p/>';
@@ -1157,7 +1405,13 @@ PY;
             $column += $colspan;
         }
 
-        return '<w:tr>'.$cells.'</w:tr>';
+        $rowProperties = '';
+        if (preg_match('/(?:^|;)\s*height\s*:\s*([0-9]+(?:\.[0-9]+)?)pt/i', $row->getAttribute('style'), $heightMatch)) {
+            $rowHeight = max(1, (int) round((float) $heightMatch[1] * 20));
+            $rowProperties = '<w:trPr><w:trHeight w:val="'.$rowHeight.'" w:hRule="atLeast"/></w:trPr>';
+        }
+
+        return '<w:tr>'.$rowProperties.$cells.'</w:tr>';
     }
 
     private function renderWordInline(DOMNode $parent, array $format = []): string
@@ -1203,6 +1457,9 @@ PY;
         }
 
         $properties = '';
+        if (preg_match('/^\s*\x{2610}\s*$/u', $text) === 1) {
+            $properties .= '<w:rFonts w:ascii="Segoe UI Symbol" w:hAnsi="Segoe UI Symbol"/>';
+        }
         if (! empty($format['bold'])) {
             $properties .= '<w:b/>';
         }
@@ -1246,11 +1503,13 @@ PY;
             .'h3{font-size:13pt;margin:12pt 0 6pt}table{width:100%;border-collapse:collapse;margin:10pt 0}'
             .'th,td{border:1px solid #111;padding:3pt;text-align:left}th{background:#d3d3d3;color:#111;font-size:8pt}'
             .'.converted-pdf-page{box-sizing:border-box;margin:0 auto 20pt;border:1px solid #d1d5db;background:#fff;box-shadow:0 2px 8px #173b5912;page-break-after:always}.converted-pdf-header{display:block;width:100%;height:auto;margin-bottom:8pt}'
-            .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:7pt;line-height:1.15;margin-top:3pt;margin-bottom:5pt}'
-            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:2pt 3pt;vertical-align:middle}'
+            .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:7pt;line-height:1;margin-top:3pt;margin-bottom:5pt}'
+            .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:2pt 3pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:7pt}'
-            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold}'
+            .'.converted-pdf-table .converted-pdf-section-cell{background:#163666;color:#fff;font-weight:bold;text-align:left}'
+            .'.converted-pdf-table .converted-pdf-checkbox-cell{font-family:DejaVu Sans,sans-serif;font-size:9pt;line-height:1;text-align:center}'
             .'.converted-pdf-table .converted-pdf-cell{background:#fff;color:#111}'
+            .'.converted-pdf-table .converted-pdf-separator-row td{background:#1f3863;color:#1f3863}'
             .'header{position:fixed;top:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
             .'footer{position:fixed;bottom:-1.5cm;left:0;right:0;height:auto;font-size:9pt}'
             .'blockquote{margin:8pt 0 8pt 20pt}'
