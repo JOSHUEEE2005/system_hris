@@ -408,6 +408,8 @@ class RegistrationWorkflowTest extends TestCase
             'last_name' => 'Edit',
             'email' => 'before.edit@example.com',
             'hire_date' => '2025-01-01',
+            'regularized_date' => '2024-12-31',
+            'last_date' => '2024-12-30',
             'department_id' => $department->id,
             'position' => 'Assistant',
             'employment_status' => 'Active',
@@ -427,10 +429,29 @@ class RegistrationWorkflowTest extends TestCase
             ->assertSee('data-edit-user', false)
             ->assertSee('Edit');
 
+        $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
+            'email' => 'after.edit@example.com',
+            'role_id' => Role::where('slug', 'employee')->value('id'),
+            'status' => 'Disabled',
+            'department_id' => Department::where('department_name', 'Communications')->value('id'),
+            'position' => 'Policy Officer',
+            'employee_no' => 'EDIT-002',
+            'first_name' => 'After',
+            'last_name' => 'Updated',
+            'hire_date' => '2025-01-01',
+            'regularized_date' => '2024-12-31',
+            'last_date' => '2024-12-30',
+            'employment_status' => 'Active OIO',
+        ])
+            ->assertRedirect()
+            ->assertSessionHas('status', 'User profile updated.');
+
+        $this->assertSame('after.edit@example.com', $user->fresh()->email);
+
         $this->actingAs($admin)
             ->from(route('admin.users'))
             ->put(route('admin.users.profile.update', $user), [
-                'email' => 'after.edit@example.com',
+                'email' => 'invalid.edit@example.com',
                 'role_id' => Role::where('slug', 'employee')->value('id'),
                 'status' => 'Disabled',
                 'department_id' => Department::where('department_name', 'Communications')->value('id'),
@@ -439,8 +460,8 @@ class RegistrationWorkflowTest extends TestCase
                 'first_name' => 'After',
                 'last_name' => 'Updated',
                 'hire_date' => '2025-01-01',
-                'regularized_date' => '2024-12-31',
-                'last_date' => '2024-12-30',
+                'regularized_date' => '2024-12-30',
+                'last_date' => '2024-12-29',
                 'employment_status' => 'Active OIO',
             ])
             ->assertRedirect(route('admin.users'))
@@ -448,7 +469,7 @@ class RegistrationWorkflowTest extends TestCase
             ->assertSessionHas('errors', fn ($errors) => $errors->first('regularized_date') === 'The date regularized must be on or after the date hired.'
                 && $errors->first('last_date') === 'The end-of-employment date must be on or after the date hired.');
 
-        $this->assertSame('before.edit@example.com', $user->fresh()->email);
+        $this->assertSame('after.edit@example.com', $user->fresh()->email);
 
         $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
             'email' => 'after.edit@example.com',
@@ -462,6 +483,8 @@ class RegistrationWorkflowTest extends TestCase
             'middle_name' => 'Marie',
             'last_name' => 'Updated',
             'hire_date' => '2025-01-01',
+            'regularized_date' => '2025-06-01',
+            'last_date' => '2025-07-01',
             'employment_status' => 'Active OIO',
         ])->assertRedirect()
             ->assertSessionHas('status', 'User profile updated.');
@@ -473,6 +496,8 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('Policy Officer', $employee->position);
         $this->assertSame('after.edit@example.com', $employee->email);
         $this->assertSame('after.edit@example.com', $user->email);
+        $this->assertSame('2025-06-01', $employee->regularized_date->format('Y-m-d'));
+        $this->assertSame('2025-07-01', $employee->last_date->format('Y-m-d'));
         $this->assertSame('Disabled', $user->status);
         $this->assertSame('Active', $employee->status);
         $this->assertSame('employee', $user->roles()->firstOrFail()->slug);

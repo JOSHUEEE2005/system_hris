@@ -449,6 +449,30 @@ class AdminController extends Controller
             $internNoRule->ignore($intern->id);
         }
 
+        $regularizedDateRules = ['nullable', 'date'];
+        if ($employee && (
+            $request->input('hire_date') !== $employee->hire_date?->format('Y-m-d')
+            || $request->input('regularized_date') !== $employee->regularized_date?->format('Y-m-d')
+        )) {
+            $regularizedDateRules[] = 'after_or_equal:hire_date';
+        }
+
+        $lastDateRules = ['nullable', 'date'];
+        if ($employee && (
+            $request->input('hire_date') !== $employee->hire_date?->format('Y-m-d')
+            || $request->input('last_date') !== $employee->last_date?->format('Y-m-d')
+        )) {
+            $lastDateRules[] = 'after_or_equal:hire_date';
+        }
+
+        $internshipEndDateRules = ['nullable', 'date'];
+        if ($intern && (
+            $request->input('internship_start_date') !== $intern->internship_start_date?->format('Y-m-d')
+            || $request->input('internship_end_date') !== $intern->internship_end_date?->format('Y-m-d')
+        )) {
+            $internshipEndDateRules[] = 'after_or_equal:internship_start_date';
+        }
+
         $validator = Validator::make($request->all(), [
             'email' => ['required', 'email', 'max:150', Rule::unique('users', 'email')->ignore($user->id)],
             'role_id' => ['required', 'integer', 'exists:roles,id'],
@@ -469,12 +493,12 @@ class AdminController extends Controller
             'last_name' => [$isIntern ? 'nullable' : 'required', 'string', 'max:100'],
             'nationality' => ['nullable', 'string', 'max:100'],
             'hire_date' => [$isIntern ? 'nullable' : 'required', 'date'],
-            'regularized_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'regularized_date' => $regularizedDateRules,
             'employment_status' => [
                 $isIntern ? 'nullable' : 'required',
                 Rule::in(['Active', 'Resigned', 'Active OIO', 'Active project based', 'Active agency']),
             ],
-            'last_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
+            'last_date' => $lastDateRules,
             'sss_number' => ['nullable', 'string', 'max:50'],
             'tin_number' => ['nullable', 'string', 'max:50'],
             'hdmf_number' => ['nullable', 'string', 'max:50'],
@@ -496,7 +520,7 @@ class AdminController extends Controller
             'intern_name' => [$isIntern ? 'required' : 'nullable', 'string', 'max:255'],
             'designation' => [$isIntern ? 'required' : 'nullable', 'string', 'max:150'],
             'internship_start_date' => [$isIntern ? 'required' : 'nullable', 'date'],
-            'internship_end_date' => ['nullable', 'date', 'after_or_equal:internship_start_date'],
+            'internship_end_date' => $internshipEndDateRules,
             'internship_status' => [
                 $isIntern ? 'required' : 'nullable',
                 Rule::in(['Finished', 'Pre terminated', 'Active', 'Cancelled']),
