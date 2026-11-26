@@ -506,6 +506,10 @@ class AdminController extends Controller
             'university' => ['nullable', 'string', 'max:200'],
             'course' => ['nullable', 'string', 'max:200'],
             'degree_expected' => ['nullable', 'string', 'max:200'],
+        ], [
+            'regularized_date.after_or_equal' => 'The date regularized must be on or after the date hired.',
+            'last_date.after_or_equal' => 'The end-of-employment date must be on or after the date hired.',
+            'internship_end_date.after_or_equal' => 'The internship end date must be on or after the internship start date.',
         ]);
 
         if ($validator->fails()) {

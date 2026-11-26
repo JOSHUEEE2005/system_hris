@@ -427,6 +427,29 @@ class RegistrationWorkflowTest extends TestCase
             ->assertSee('data-edit-user', false)
             ->assertSee('Edit');
 
+        $this->actingAs($admin)
+            ->from(route('admin.users'))
+            ->put(route('admin.users.profile.update', $user), [
+                'email' => 'after.edit@example.com',
+                'role_id' => Role::where('slug', 'employee')->value('id'),
+                'status' => 'Disabled',
+                'department_id' => Department::where('department_name', 'Communications')->value('id'),
+                'position' => 'Policy Officer',
+                'employee_no' => 'EDIT-002',
+                'first_name' => 'After',
+                'last_name' => 'Updated',
+                'hire_date' => '2025-01-01',
+                'regularized_date' => '2024-12-31',
+                'last_date' => '2024-12-30',
+                'employment_status' => 'Active OIO',
+            ])
+            ->assertRedirect(route('admin.users'))
+            ->assertSessionHasErrors(['regularized_date', 'last_date'])
+            ->assertSessionHas('errors', fn ($errors) => $errors->first('regularized_date') === 'The date regularized must be on or after the date hired.'
+                && $errors->first('last_date') === 'The end-of-employment date must be on or after the date hired.');
+
+        $this->assertSame('before.edit@example.com', $user->fresh()->email);
+
         $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
             'email' => 'after.edit@example.com',
             'role_id' => Role::where('slug', 'employee')->value('id'),
@@ -481,6 +504,27 @@ class RegistrationWorkflowTest extends TestCase
             'department_id' => $department->id,
             'user_id' => $user->id,
         ]);
+
+        $this->actingAs($admin)
+            ->from(route('admin.users'))
+            ->put(route('admin.users.profile.update', $user), [
+                'email' => 'casey@example.com',
+                'role_id' => Role::where('slug', 'employee')->value('id'),
+                'status' => 'Active',
+                'department_id' => $department->id,
+                'position' => 'Trade Research Intern',
+                'intern_no' => 'EDIT-INT-002',
+                'intern_name' => 'Casey Updated',
+                'designation' => 'Research Intern',
+                'internship_start_date' => '2026-01-01',
+                'internship_end_date' => '2025-12-31',
+                'internship_status' => 'Finished',
+            ])
+            ->assertRedirect(route('admin.users'))
+            ->assertSessionHasErrors(['internship_end_date'])
+            ->assertSessionHas('errors', fn ($errors) => $errors->first('internship_end_date') === 'The internship end date must be on or after the internship start date.');
+
+        $this->assertSame('casey@example.com', $user->fresh()->email);
 
         $this->actingAs($admin)->put(route('admin.users.profile.update', $user), [
             'email' => 'casey.updated@example.com',
