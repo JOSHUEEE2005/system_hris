@@ -63,7 +63,7 @@ class AdminController extends Controller
             'auditLogs' => $canViewAudit
                 ? AuditLog::with('actor:id,name')
                     ->latest()
-                    ->limit(5)
+                    ->limit(4)
                     ->get(['id', 'actor_user_id', 'event_key', 'created_at'])
                 : collect(),
             'canViewAudit' => $canViewAudit,

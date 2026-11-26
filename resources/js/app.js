@@ -441,12 +441,23 @@ const contractCards = [...document.querySelectorAll('[data-contract-card]')];
 const noContractCardsMatch = document.getElementById('contract-search-empty');
 const contractFolderFilters = [...document.querySelectorAll('[data-contract-folder-filter]')];
 const personalContractFolderFilters = [...document.querySelectorAll('[data-personal-folder-filter]')];
+const contractGrid = document.getElementById('contract-grid');
+const contractShowAllButton = document.querySelector('[data-contract-show-all]');
 let selectedContractFolder = 'all';
 let selectedPersonalContractUser = '';
+let showAllContracts = false;
 
 const filterContractCards = () => {
     const query = contractSearch instanceof HTMLInputElement ? contractSearch.value.trim().toLowerCase() : '';
+    const hasActiveFilter = Boolean(query || selectedContractFolder !== 'all' || selectedPersonalContractUser);
+    const recentLimit = Number(contractGrid?.dataset.contractLimit || 0);
+    const isCompactRecent = recentLimit > 0
+        && contractCards.length > recentLimit
+        && !showAllContracts
+        && !hasActiveFilter;
     let visibleCount = 0;
+
+    contractGrid?.classList.toggle('contract-grid-compact', isCompactRecent);
 
     contractCards.forEach((card) => {
         const matchesSearch = card.dataset.search.includes(query);
@@ -456,7 +467,11 @@ const filterContractCards = () => {
         const recipientUserIds = (card.dataset.recipientUserIds || '').split(',');
         const matchesPersonalFolder = !selectedPersonalContractUser
             || recipientUserIds.includes(selectedPersonalContractUser);
-        card.hidden = !matchesSearch || !matchesFolder || !matchesPersonalFolder;
+        const isBeyondRecentLimit = recentLimit > 0
+            && !showAllContracts
+            && !hasActiveFilter
+            && Number(card.dataset.contractIndex) >= recentLimit;
+        card.hidden = !matchesSearch || !matchesFolder || !matchesPersonalFolder || isBeyondRecentLimit;
         card.querySelectorAll('[data-recipient-status-user]').forEach((detail) => {
             detail.hidden = !selectedPersonalContractUser
                 || detail.dataset.recipientStatusUser !== selectedPersonalContractUser;
@@ -467,7 +482,18 @@ const filterContractCards = () => {
     if (noContractCardsMatch instanceof HTMLElement) {
         noContractCardsMatch.hidden = contractCards.length === 0 || visibleCount !== 0;
     }
+
+    if (contractShowAllButton instanceof HTMLButtonElement && recentLimit > 0) {
+        contractShowAllButton.hidden = contractCards.length <= recentLimit || hasActiveFilter;
+        contractShowAllButton.textContent = showAllContracts ? `Show recent ${recentLimit}` : `View all ${contractCards.length} contracts`;
+        contractShowAllButton.setAttribute('aria-expanded', String(showAllContracts));
+    }
 };
+
+contractShowAllButton?.addEventListener('click', () => {
+    showAllContracts = !showAllContracts;
+    filterContractCards();
+});
 
 personalContractFolderFilters.forEach((button) => {
     button.addEventListener('click', () => {

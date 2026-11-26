@@ -20,26 +20,26 @@
         </div>
     @endif
 
-    <main class="contract-page">
+    <main class="contract-page {{ $canManageContracts ? 'contract-page-manager' : '' }}">
         <div class="contract-page-heading">
             <div>
                 <h2>{{ $canManageContracts ? 'Contracts and files' : 'Contracts shared with you' }}</h2>
                 <p>{{ $canManageContracts ? 'Create a contract or upload a file, then deliver it to a department or selected employees.' : 'Open or download contracts sent to you by HR. Your access is recorded automatically.' }}</p>
             </div>
-            @if ($canManageContracts)
-                <button id="open-contract-modal" class="contract-primary-button" type="button">＋ <span>New Contract</span></button>
-            @endif
         </div>
 
         @if ($canManageContracts)
             <div class="contract-toolbar">
                 <label class="contract-search"><span aria-hidden="true">⌕</span><input id="contract-search" type="search" placeholder="Search contract or file name" aria-label="Search contracts"></label>
-                <form class="contract-folder-create" method="POST" action="{{ route('admin.contracts.folders.store') }}">
-                    @csrf
-                    <label class="sr-only" for="contract-folder-name">New folder name</label>
-                    <input id="contract-folder-name" name="name" value="{{ old('name') }}" maxlength="100" placeholder="New folder name" required>
-                    <button class="contract-action-secondary" type="submit">＋ Create folder</button>
-                </form>
+                <div class="contract-toolbar-actions">
+                    <form class="contract-folder-create" method="POST" action="{{ route('admin.contracts.folders.store') }}">
+                        @csrf
+                        <label class="sr-only" for="contract-folder-name">New folder name</label>
+                        <input id="contract-folder-name" name="name" value="{{ old('name') }}" maxlength="100" placeholder="New folder name" required>
+                        <button class="contract-action-secondary" type="submit">＋ New Folder</button>
+                    </form>
+                    <button id="open-contract-modal" class="contract-primary-button" type="button">＋ <span>New Contract</span></button>
+                </div>
             </div>
             @if ($errors->folder->any())
                 <p class="contract-folder-error" role="alert">{{ $errors->folder->first('name') }}</p>
@@ -56,35 +56,14 @@
         @endif
 
         <div class="{{ $canManageContracts ? 'contract-manager-browser' : '' }}">
-            @if ($canManageContracts)
-                <aside class="contract-personal-folders">
-                    <h3>Personal folders</h3>
-                    <p>Open a recipient’s folder to view their contracts.</p>
-                    <nav class="contract-personal-folder-list" aria-label="Personal contract folders">
-                        <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="" aria-pressed="true">
-                            <span>All recipient folders</span>
-                        </button>
-                        @foreach ($personalFolders as $folder)
-                            @php
-                                $totalContracts = $folder->user?->contract_recipients_count ?? 0;
-                                $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
-                                $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
-                            @endphp
-                            <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
-                                <span>{{ $folder->user?->name ?? $folder->name }}</span>
-                                <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}">
-                                    <span style="width: {{ $progress }}%"></span>
-                                </span>
-                                <small>{{ $openedContracts }} of {{ $totalContracts }} opened · {{ $progress }}%</small>
-                            </button>
-                        @endforeach
-                    </nav>
-                </aside>
-            @endif
-
             <div class="{{ $canManageContracts ? 'contract-manager-content' : '' }}">
                 @if ($contracts->isNotEmpty())
-                    <h3 class="contract-section-heading">{{ $canManageContracts ? 'Recently sent' : 'Recently sent to you' }}</h3>
+                    <div class="contract-section-heading-row">
+                        <h3 class="contract-section-heading">{{ $canManageContracts ? 'Recently sent' : 'Recently sent to you' }}</h3>
+                        @if ($canManageContracts && $contracts->count() > 4)
+                            <button class="contract-show-all" type="button" data-contract-show-all aria-expanded="false">View all {{ $contracts->count() }} contracts</button>
+                        @endif
+                    </div>
                 @endif
                 @if ($contracts->isEmpty())
                     <div class="contract-empty">
@@ -93,7 +72,7 @@
                         <p>{{ $canManageContracts ? 'Add a contract to make it available in the selected employees’ portal.' : 'When HR sends you a contract, it will appear here.' }}</p>
                     </div>
                 @else
-                    <div class="contract-grid" id="contract-grid">
+                    <div class="contract-grid {{ $canManageContracts ? 'contract-grid-recent' : '' }}" id="contract-grid" @if ($canManageContracts) data-contract-limit="4" @endif>
                         @foreach ($contracts as $contract)
                     @php
                         $isTemplate = $contract->content_html !== null;
@@ -106,6 +85,7 @@
                     <article
                         class="contract-card"
                         data-contract-card
+                        data-contract-index="{{ $loop->index }}"
                         data-folder-id="{{ $contract->folder_id ?? '' }}"
                         data-recipient-user-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
@@ -224,6 +204,34 @@
                     <p id="contract-search-empty" class="contract-search-empty" hidden>No contracts match your search or folder selection.</p>
                 @endif
             </div>
+
+            @if ($canManageContracts)
+                <section class="contract-personal-folders">
+                    <h3>Employee contracts</h3>
+                    <p>Select a recipient’s folder to see the contracts sent to them and their opening progress.</p>
+                    <nav class="contract-personal-folder-list" aria-label="Personal contract folders">
+                        <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="" aria-pressed="true">
+                            <span class="contract-personal-folder-name">All recipient folders</span>
+                            <small>{{ $personalFolders->count() }} folders</small>
+                        </button>
+                        @foreach ($personalFolders as $folder)
+                            @php
+                                $totalContracts = $folder->user?->contract_recipients_count ?? 0;
+                                $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
+                                $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
+                            @endphp
+                            <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
+                                <span class="contract-personal-folder-name">{{ $folder->user?->name ?? $folder->name }}</span>
+                                <small>{{ $totalContracts }} {{ $totalContracts === 1 ? 'contract' : 'contracts' }}</small>
+                                <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%">
+                                    <span>{{ $progress }}%</span>
+                                </span>
+                                <small>{{ $openedContracts }} opened</small>
+                            </button>
+                        @endforeach
+                    </nav>
+                </section>
+            @endif
         </div>
     </main>
 
