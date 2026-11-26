@@ -209,27 +209,45 @@
                 <section class="contract-personal-folders">
                     <h3>Employee contracts</h3>
                     <p>Select a recipient’s folder to see the contracts sent to them and their opening progress.</p>
-                    <nav class="contract-personal-folder-list" aria-label="Personal contract folders">
-                        <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="" aria-pressed="true">
-                            <span class="contract-personal-folder-name">All recipient folders</span>
-                            <small>{{ $personalFolders->count() }} folders</small>
-                        </button>
-                        @foreach ($personalFolders as $folder)
-                            @php
-                                $totalContracts = $folder->user?->contract_recipients_count ?? 0;
-                                $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
-                                $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
-                            @endphp
-                            <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
-                                <span class="contract-personal-folder-name">{{ $folder->user?->name ?? $folder->name }}</span>
-                                <small>{{ $totalContracts }} {{ $totalContracts === 1 ? 'contract' : 'contracts' }}</small>
-                                <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%">
-                                    <span>{{ $progress }}%</span>
-                                </span>
-                                <small>{{ $openedContracts }} opened</small>
-                            </button>
+                    <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="" aria-pressed="true">
+                        <span class="contract-personal-folder-name">All recipient folders</span>
+                        <small>{{ $personalFolders->count() }} folders</small>
+                    </button>
+                    @php
+                        $personalFoldersByDepartment = $personalFolders->groupBy(fn ($folder) =>
+                            $folder->user?->department?->department_name
+                                ?? $folder->user?->employee?->department?->department_name
+                                ?? $folder->user?->intern?->department?->department_name
+                                ?? 'Unassigned department'
+                        )->sortKeys();
+                    @endphp
+                    <div class="contract-department-folder-groups">
+                        @foreach ($personalFoldersByDepartment as $departmentName => $departmentFolders)
+                            <section class="contract-department-folder-group" aria-labelledby="contract-department-{{ $loop->index }}">
+                                <h4 id="contract-department-{{ $loop->index }}">
+                                    {{ $departmentName }}
+                                    <span>{{ $departmentFolders->count() }} {{ $departmentFolders->count() === 1 ? 'folder' : 'folders' }}</span>
+                                </h4>
+                                <nav class="contract-personal-folder-list" aria-label="{{ $departmentName }} contract folders">
+                                    @foreach ($departmentFolders as $folder)
+                                        @php
+                                            $totalContracts = $folder->user?->contract_recipients_count ?? 0;
+                                            $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
+                                            $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
+                                        @endphp
+                                        <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
+                                            <span class="contract-personal-folder-name">{{ $folder->user?->name ?? $folder->name }}</span>
+                                            <small>{{ $totalContracts }} {{ $totalContracts === 1 ? 'contract' : 'contracts' }}</small>
+                                            <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%">
+                                                <span>{{ $progress }}%</span>
+                                            </span>
+                                            <small>{{ $openedContracts }} opened</small>
+                                        </button>
+                                    @endforeach
+                                </nav>
+                            </section>
                         @endforeach
-                    </nav>
+                    </div>
                 </section>
             @endif
         </div>

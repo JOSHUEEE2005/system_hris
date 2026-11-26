@@ -62,10 +62,12 @@ class ContractController extends Controller
                 : collect(),
             'personalFolders' => $canManageContracts
                 ? ContractFolder::with([
-                    'user' => fn ($query) => $query->withCount([
-                        'contractRecipients',
-                        'contractRecipients as opened_contract_recipients_count' => fn (Builder $recipients) => $recipients->whereNotNull('opened_at'),
-                    ]),
+                    'user' => fn ($query) => $query
+                        ->with(['department', 'employee.department', 'intern.department'])
+                        ->withCount([
+                            'contractRecipients',
+                            'contractRecipients as opened_contract_recipients_count' => fn (Builder $recipients) => $recipients->whereNotNull('opened_at'),
+                        ]),
                 ])->whereNotNull('user_id')->orderBy('name')->get()
                 : $viewer->personalContractFolder()->get(),
             'recipients' => $canManageContracts
