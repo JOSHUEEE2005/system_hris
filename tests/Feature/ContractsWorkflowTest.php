@@ -92,6 +92,43 @@ class ContractsWorkflowTest extends TestCase
         );
     }
 
+    public function test_word_export_preserves_pdf_page_tables_headers_and_page_breaks(): void
+    {
+        $header = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=';
+        $html = '<div class="converted-pdf-page"><img src="data:image/png;base64,'.$header.'" alt="PDF header">'
+            .'<p class="converted-pdf-text" style="margin-left:10%;width:80%">Page one</p>'
+            .'<table><tbody><tr><td>Imported table</td></tr></tbody></table></div>'
+            .'<div class="converted-pdf-page-break"></div>'
+            .'<div class="converted-pdf-page"><p>Page two</p></div>';
+
+        $docx = app(ContractDocumentService::class)->renderDocx($html);
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-test-');
+        $this->assertNotFalse($temporaryPath);
+        try {
+            $this->assertNotFalse(file_put_contents($temporaryPath, $docx));
+            $archive = new \ZipArchive();
+            $this->assertTrue($archive->open($temporaryPath) === true);
+            $documentXml = $archive->getFromName('word/document.xml');
+            $relationships = $archive->getFromName('word/_rels/document.xml.rels');
+            $contentTypes = $archive->getFromName('[Content_Types].xml');
+            $image = $archive->getFromName('word/media/image1.png');
+            $archive->close();
+        } finally {
+            @unlink($temporaryPath);
+        }
+
+        $this->assertIsString($documentXml);
+        $this->assertIsString($relationships);
+        $this->assertIsString($contentTypes);
+        $this->assertSame(base64_decode($header), $image);
+        $this->assertStringContainsString('<w:tbl>', $documentXml);
+        $this->assertStringContainsString('Imported table', $documentXml);
+        $this->assertStringContainsString('<w:br w:type="page"/>', $documentXml);
+        $this->assertStringContainsString('<pic:pic>', $documentXml);
+        $this->assertStringContainsString('rIdContractImage1', $relationships);
+        $this->assertSame(1, substr_count($contentTypes, 'Extension="png"'));
+    }
+
     public function test_hr_can_send_a_private_file_and_recipient_downloads_are_tracked_as_opened(): void
     {
         $department = Department::where('department_name', 'Chamber Services')->firstOrFail();

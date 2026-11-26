@@ -15,6 +15,12 @@ use ZipArchive;
 
 class ContractDocumentService
 {
+    private array $wordImages = [];
+
+    private array $wordImageNamesByHash = [];
+
+    private int $wordDrawingId = 0;
+
     private const ALLOWED_TAGS = [
         'a', 'b', 'blockquote', 'br', 'col', 'colgroup', 'div', 'em', 'footer', 'h1', 'h2',
         'h3', 'header', 'i', 'li', 'ol', 'p', 's', 'span', 'strong',
@@ -932,6 +938,10 @@ PY;
 
     public function renderDocx(string $html): string
     {
+        $this->wordImages = [];
+        $this->wordImageNamesByHash = [];
+        $this->wordDrawingId = 0;
+
         $document = $this->parseFragment($html);
         $root = $this->fragmentRoot($document);
         $headerContent = null;
@@ -987,11 +997,20 @@ PY;
                 .($footerContent !== '' ? $footerContent : '<w:p/>').'</w:ftr>';
         }
 
+        $imageContentTypes = [];
+        $imageEntries = [];
+        foreach ($this->wordImages as $image) {
+            $documentRelationships .= '<Relationship Id="'.$image['relationship_id'].'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/'.$image['name'].'"/>';
+            $imageContentTypes[$image['extension']] = '<Default Extension="'.$image['extension'].'" ContentType="'.$image['mime_type'].'"/>';
+            $imageEntries['word/media/'.$image['name']] = $image['contents'];
+        }
+
         $entries = [
             '[Content_Types].xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                 .'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
                 .'<Default Extension="xml" ContentType="application/xml"/>'
+                .implode('', $imageContentTypes)
                 .'<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
                 .'<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
                 .$contentOverrides.'</Types>',
@@ -1000,7 +1019,7 @@ PY;
                 .'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
                 .'</Relationships>',
             'word/document.xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
                 .'<w:body>'.$body.'<w:sectPr>'.$sectionReferences.'<w:pgSz w:w="11906" w:h="16838"/>'
                 .'<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>'
                 .'</w:sectPr></w:body></w:document>',
@@ -1019,7 +1038,7 @@ PY;
                 .'<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/>'
                 .'<w:pPr><w:spacing w:before="160" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>'
                 .'</w:styles>',
-        ] + $sectionEntries;
+        ] + $sectionEntries + $imageEntries;
 
         $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-');
         if ($temporaryPath === false) {
@@ -1231,6 +1250,20 @@ PY;
         if ($tag === 'table') {
             return $this->renderWordTable($node);
         }
+        if ($tag === 'img') {
+            return $this->wordParagraph($this->renderWordImage($node));
+        }
+        if ($tag === 'div' && in_array('converted-pdf-page-break', preg_split('/\s+/', trim($node->getAttribute('class'))), true)) {
+            return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+        }
+        if ($tag === 'div' && in_array('converted-pdf-page', preg_split('/\s+/', trim($node->getAttribute('class'))), true)) {
+            $page = '';
+            foreach ($node->childNodes as $child) {
+                $page .= $this->renderWordBlock($child);
+            }
+
+            return $page;
+        }
         if ($tag === 'ul' || $tag === 'ol') {
             $list = '';
             $number = (int) ($node->getAttribute('start') ?: 1);
@@ -1250,7 +1283,9 @@ PY;
                 ? '<w:pStyle w:val="Heading'.substr($tag, 1).'"/>'
                 : '';
             $alignment = $this->wordAlignment($node);
-            $indent = $tag === 'blockquote' ? '<w:ind w:left="720"/>' : '';
+            $indent = $tag === 'blockquote'
+                ? '<w:ind w:left="720"/>'
+                : $this->wordParagraphIndent($node);
             $properties = ($style !== '' || $alignment !== '' || $indent !== '')
                 ? '<w:pPr>'.$style.$alignment.$indent.'</w:pPr>'
                 : '';
@@ -1433,6 +1468,11 @@ PY;
 
                 continue;
             }
+            if ($tag === 'img') {
+                $output .= $this->renderWordImage($child);
+
+                continue;
+            }
 
             $childFormat = $format;
             if (in_array($tag, ['b', 'strong'], true)) {
@@ -1448,6 +1488,77 @@ PY;
         }
 
         return $output;
+    }
+
+    private function renderWordImage(DOMElement $image): string
+    {
+        $source = $image->getAttribute('src');
+        if (! preg_match('/^data:image\/(png|jpeg);base64,([A-Za-z0-9+\/=\r\n]+)$/i', $source, $matches)) {
+            return '';
+        }
+
+        $contents = base64_decode(preg_replace('/\s+/', '', $matches[2]), true);
+        if ($contents === false || $contents === '' || strlen($contents) > 5000000) {
+            return '';
+        }
+
+        $extension = strtolower($matches[1]) === 'png' ? 'png' : 'jpg';
+        $mimeType = $extension === 'png' ? 'image/png' : 'image/jpeg';
+        $signature = $extension === 'png' ? "\x89PNG\r\n\x1a\n" : "\xFF\xD8\xFF";
+        if (! str_starts_with($contents, $signature)) {
+            return '';
+        }
+
+        $hash = hash('sha256', $contents);
+        if (! isset($this->wordImageNamesByHash[$hash])) {
+            $index = count($this->wordImages) + 1;
+            $name = 'image'.$index.'.'.$extension;
+            $relationshipId = 'rIdContractImage'.$index;
+            $this->wordImages[] = [
+                'relationship_id' => $relationshipId,
+                'name' => $name,
+                'extension' => $extension,
+                'mime_type' => $mimeType,
+                'contents' => $contents,
+            ];
+            $this->wordImageNamesByHash[$hash] = $index - 1;
+        }
+
+        $imageDetails = $this->wordImages[$this->wordImageNamesByHash[$hash]];
+        $dimensions = function_exists('getimagesizefromstring') ? @getimagesizefromstring($contents) : false;
+        $pixelWidth = is_array($dimensions) ? max(1, (int) $dimensions[0]) : 600;
+        $pixelHeight = is_array($dimensions) ? max(1, (int) $dimensions[1]) : 200;
+        $scale = min(
+            1,
+            5715000 / ($pixelWidth * 9525),
+            8229600 / ($pixelHeight * 9525),
+        );
+        $width = max(1, (int) round($pixelWidth * 9525 * $scale));
+        $height = max(1, (int) round($pixelHeight * 9525 * $scale));
+        $drawingId = ++$this->wordDrawingId;
+        $description = htmlspecialchars($image->getAttribute('alt'), ENT_XML1 | ENT_QUOTES, 'UTF-8');
+
+        return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+            .'<wp:extent cx="'.$width.'" cy="'.$height.'"/>'
+            .'<wp:docPr id="'.$drawingId.'" name="'.$imageDetails['name'].'" descr="'.$description.'"/>'
+            .'<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+            .'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            .'<pic:pic><pic:nvPicPr><pic:cNvPr id="'.$drawingId.'" name="'.$imageDetails['name'].'"/>'
+            .'<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="'.$imageDetails['relationship_id'].'"/>'
+            .'<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/>'
+            .'<a:ext cx="'.$width.'" cy="'.$height.'"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/>'
+            .'</a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+    }
+
+    private function wordParagraphIndent(DOMElement $element): string
+    {
+        if (! preg_match('/(?:^|;)\s*margin-left\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $element->getAttribute('style'), $match)) {
+            return '';
+        }
+
+        $indent = (int) round(9026 * min(90, max(0, (float) $match[1])) / 100);
+
+        return $indent > 0 ? '<w:ind w:left="'.$indent.'"/>' : '';
     }
 
     private function wordRun(string $text, array $format = []): string
