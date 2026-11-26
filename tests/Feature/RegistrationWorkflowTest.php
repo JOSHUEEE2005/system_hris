@@ -270,6 +270,49 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('employee', $user->roles()->firstOrFail()->slug);
     }
 
+    public function test_super_admin_keeps_user_management_access_when_permission_links_are_stale(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $admin = User::create([
+            'name' => 'Super Admin',
+            'email' => 'stale-permissions-admin@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $superAdminRole = Role::where('slug', 'super-admin')->firstOrFail();
+        $admin->roles()->attach($superAdminRole);
+        $superAdminRole->permissions()->detach(
+            \App\Models\Permission::whereIn('permission_key', ['users.manage', 'employees.manage'])->pluck('id'),
+        );
+        $employee = Employee::create([
+            'employee_no' => 'STALE-001',
+            'first_name' => 'Directory',
+            'last_name' => 'User',
+            'email' => 'directory@example.com',
+            'hire_date' => '2025-01-01',
+            'department_id' => $department->id,
+            'position' => 'Analyst',
+            'employment_status' => 'Active',
+        ]);
+        $directoryUser = User::create([
+            'name' => 'Directory User',
+            'email' => 'directory@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'employee_id' => $employee->id,
+            'department_id' => $department->id,
+            'status' => 'Active',
+        ]);
+        $directoryUser->roles()->attach(Role::where('slug', 'employee')->firstOrFail());
+
+        $this->assertTrue($admin->hasPermission('users.manage'));
+        $this->assertTrue($admin->hasPermission('employees.manage'));
+        $this->actingAs($admin)->get(route('admin.users'))
+            ->assertOk()
+            ->assertSee('id="open-user-modal"', false)
+            ->assertSee('data-edit-user', false);
+    }
+
     public function test_intern_creation_requires_an_internship_status_and_does_not_leave_partial_records(): void
     {
         $department = Department::where('department_name', 'Dual Training')->firstOrFail();

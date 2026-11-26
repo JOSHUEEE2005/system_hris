@@ -31,6 +31,9 @@
         <article class="sa-card">
             <div class="mb-4 flex items-end justify-between gap-3">
                 <div><h2 class="sa-section-title mb-1">User Directories Total ({{ $directoryTotal }})</h2><p class="sa-muted">Browse all employees by department and employment type.</p></div>
+                @if ($canManageUsers && $canManageEmployees)
+                    <button id="open-user-modal" class="sa-primary inline-flex items-center gap-2" type="button">+ Add new user</button>
+                @endif
             </div>
             <div class="sa-directory-toolbar">
                 <input id="directory-search" aria-label="Search users" placeholder="Search by name, ID, or email">
@@ -136,9 +139,6 @@
         </article>
 
         <aside class="sa-user-aside">
-            @if ($canManageEmployees && $canManageUsers)
-                <button id="open-user-modal" class="sa-card flex items-center justify-center gap-2 text-center font-bold text-[#0d5b88] hover:bg-slate-50" type="button">♟ <span>Add new User +</span></button>
-            @endif
             <article class="sa-card"><h2 class="sa-section-title">Pending Applicants</h2><ul class="sa-list">@forelse($users->where('status','Pending')->take(5) as $user)<li class="flex justify-between gap-2"><span>{{ $user->name }}</span><strong class="text-amber-600">(review)</strong></li>@empty<li>No pending applicants.</li>@endforelse</ul></article>
             <article class="sa-card"><h2 class="sa-section-title">Status Report</h2><div class="mx-auto my-3 h-24 w-24 rounded-full" style="background: conic-gradient(#1760df 0 65%, #22a8f3 65% 82%, #9d54d8 82% 100%);"></div><ul class="sa-list"><li class="flex justify-between">Active Users <strong>{{ $users->where('status','Active')->count() }}</strong></li><li class="flex justify-between">Pending <strong>{{ $users->where('status','Pending')->count() }}</strong></li><li class="flex justify-between">Disabled <strong>{{ $users->where('status','Disabled')->count() }}</strong></li></ul></article>
         </aside>

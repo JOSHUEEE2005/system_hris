@@ -102,6 +102,10 @@ class User extends Authenticatable
 
     public function hasPermission(string $permission): bool
     {
+        if ($this->roles()->where('slug', 'super-admin')->exists()) {
+            return true;
+        }
+
         return $this->roles()
             ->whereHas('permissions', fn ($query) => $query->where('permission_key', $permission))
             ->exists();
