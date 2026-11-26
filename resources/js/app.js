@@ -457,6 +457,10 @@ const filterContractCards = () => {
         const matchesPersonalFolder = !selectedPersonalContractUser
             || recipientUserIds.includes(selectedPersonalContractUser);
         card.hidden = !matchesSearch || !matchesFolder || !matchesPersonalFolder;
+        card.querySelectorAll('[data-recipient-status-user]').forEach((detail) => {
+            detail.hidden = !selectedPersonalContractUser
+                || detail.dataset.recipientStatusUser !== selectedPersonalContractUser;
+        });
         if (!card.hidden) visibleCount++;
     });
 

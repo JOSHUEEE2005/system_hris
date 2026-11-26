@@ -24,7 +24,7 @@
         <div class="contract-page-heading">
             <div>
                 <h2>{{ $canManageContracts ? 'Contracts and files' : 'Contracts shared with you' }}</h2>
-                <p>{{ $canManageContracts ? 'Create a contract or upload a file, then deliver it to a department or selected employees.' : 'Review, download, and acknowledge contracts sent to you by HR.' }}</p>
+                <p>{{ $canManageContracts ? 'Create a contract or upload a file, then deliver it to a department or selected employees.' : 'Open or download contracts sent to you by HR. Your access is recorded automatically.' }}</p>
             </div>
             @if ($canManageContracts)
                 <button id="open-contract-modal" class="contract-primary-button" type="button">＋ <span>New Contract</span></button>
@@ -65,8 +65,17 @@
                             <span>All recipient folders</span>
                         </button>
                         @foreach ($personalFolders as $folder)
+                            @php
+                                $totalContracts = $folder->user?->contract_recipients_count ?? 0;
+                                $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
+                                $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
+                            @endphp
                             <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
                                 <span>{{ $folder->user?->name ?? $folder->name }}</span>
+                                <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}">
+                                    <span style="width: {{ $progress }}%"></span>
+                                </span>
+                                <small>{{ $openedContracts }} of {{ $totalContracts }} opened · {{ $progress }}%</small>
                             </button>
                         @endforeach
                     </nav>
@@ -74,6 +83,9 @@
             @endif
 
             <div class="{{ $canManageContracts ? 'contract-manager-content' : '' }}">
+                @if ($contracts->isNotEmpty())
+                    <h3 class="contract-section-heading">{{ $canManageContracts ? 'Recently sent' : 'Recently sent to you' }}</h3>
+                @endif
                 @if ($contracts->isEmpty())
                     <div class="contract-empty">
                         <span class="contract-empty-icon" aria-hidden="true">▤</span>
@@ -99,19 +111,19 @@
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
                     >
                         <div class="contract-preview">
-                            @if ($isPreviewable && $isImage)
+                            @if ($canManageContracts && $isPreviewable && $isImage)
                                 <img src="{{ route('admin.contracts.preview', $contract) }}" alt="Preview of {{ $contract->original_filename }}" loading="lazy">
-                            @elseif ($contract->mime_type === 'application/pdf' || $isTemplate)
+                            @elseif ($canManageContracts && ($contract->mime_type === 'application/pdf' || $isTemplate))
                                 <iframe src="{{ route('admin.contracts.preview', $contract) }}" title="Preview of {{ $contract->original_filename }}" loading="lazy"></iframe>
                             @else
                                 <div class="contract-file-placeholder">
                                     <span>{{ $fileExtension }}</span>
-                                    <strong>File preview</strong>
-                                    <small>Download to view this file type</small>
+                                    <strong>{{ $isPreviewable ? 'Preview available' : 'File preview' }}</strong>
+                                    <small>{{ $isPreviewable ? 'Open preview to view this file' : 'Download to view this file type' }}</small>
                                 </div>
                             @endif
                             @if ($isPreviewable)
-                                <a class="contract-preview-link" href="{{ route('admin.contracts.preview', $contract) }}" target="_blank" rel="noopener">Open preview</a>
+                                <a class="contract-preview-link" href="{{ route('admin.contracts.preview', [$contract, 'track_open' => 1]) }}" target="_blank" rel="noopener">Open preview</a>
                             @endif
                         </div>
                         <div class="contract-card-body">
@@ -123,7 +135,7 @@
                                 @if ($canManageContracts)
                                     <span class="contract-status-badge sent">Sent</span>
                                 @else
-                                    <span class="contract-status-badge {{ strtolower($recipient->status) }}">{{ $recipient->status }}</span>
+                                    <span class="contract-status-badge {{ $recipient->opened_at ? 'opened' : 'pending' }}">{{ $recipient->opened_at ? 'Opened' : 'Not opened' }}</span>
                                 @endif
                             </div>
                             @if ($canManageContracts && $contract->folder)
@@ -139,22 +151,32 @@
                                     <span>{{ $contract->recipients_count }} {{ $contract->recipients_count === 1 ? 'recipient' : 'recipients' }}</span>
                                 </p>
                                 <div class="contract-receipt-track">
-                                    <span>{{ $contract->recipients_count - $contract->pending_recipients_count }} received</span>
-                                    <span>{{ $contract->pending_recipients_count }} pending</span>
+                                    <span>{{ $contract->opened_recipients_count }} opened</span>
+                                    <span>{{ $contract->pending_recipients_count }} not opened</span>
+                                </div>
+                                <div class="contract-recipient-status-list">
+                                    @foreach ($contract->recipients as $contractRecipient)
+                                        <div class="contract-recipient-status" data-recipient-status-user="{{ $contractRecipient->user_id }}" hidden>
+                                            <strong>{{ $contractRecipient->user?->name ?? 'Former user' }}</strong>
+                                            <span class="{{ $contractRecipient->opened_at ? 'opened' : 'pending' }}">
+                                                {{ $contractRecipient->opened_at ? 'Opened '.$contractRecipient->opened_at->format('M j, Y g:i A') : 'Not opened yet' }}
+                                            </span>
+                                        </div>
+                                    @endforeach
                                 </div>
                             @else
                                 <p class="contract-sender">Sent by {{ $contract->createdBy?->name ?? 'HR' }}</p>
                             @endif
                             <div class="contract-card-actions">
                                 @if ($isPreviewable)
-                                    <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', $contract) }}" target="_blank" rel="noopener">Preview</a>
+                                    <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', [$contract, 'track_open' => 1]) }}" target="_blank" rel="noopener">Preview</a>
                                 @endif
                                 @if ($isTemplate)
                                     <a class="contract-action-primary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'pdf']) }}">PDF</a>
                                     <a class="contract-action-secondary" href="{{ route('admin.contracts.download', [$contract, 'format' => 'docx']) }}">Word</a>
                                     @if ($contract->original_pdf_path)
                                         <a class="contract-action-secondary" href="{{ route('admin.contracts.download', [$contract, 'original' => 1]) }}">Original PDF</a>
-                                        <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', [$contract, 'original' => 1]) }}" target="_blank" rel="noopener">View original</a>
+                                        <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', [$contract, 'original' => 1, 'track_open' => 1]) }}" target="_blank" rel="noopener">View original</a>
                                     @endif
                                 @else
                                     <a class="contract-action-primary" href="{{ route('admin.contracts.download', $contract) }}">Download</a>
@@ -167,7 +189,7 @@
                                         </form>
                                     @endif
                                     @if ($isTemplate && $contract->original_pdf_path)
-                                        <form method="POST" action="{{ route('admin.contracts.convert-editor', $contract) }}" onsubmit="return confirm('This replaces the current editable content with a fresh conversion of the original PDF and resets recipient acknowledgements. Continue?')">
+                                        <form method="POST" action="{{ route('admin.contracts.convert-editor', $contract) }}" onsubmit="return confirm('This replaces the current editable content with a fresh conversion of the original PDF and resets recipient opened statuses. Continue?')">
                                             @csrf
                                             <button class="contract-action-secondary" type="submit">Rebuild from Original</button>
                                         </form>
@@ -189,13 +211,8 @@
                                         data-folder-id="{{ $contract->folder_id ?? '' }}"
                                     >Edit</button>
                                 @endif
-                                @if (! $canManageContracts && $recipient->status === 'Pending')
-                                    <form method="POST" action="{{ route('admin.contracts.received', $contract) }}">
-                                        @csrf
-                                        <button class="contract-action-received" type="submit">Mark received</button>
-                                    </form>
-                                @elseif (! $canManageContracts)
-                                    <span class="contract-received-date">Received {{ $recipient->received_at?->format('M j, Y') }}</span>
+                                @if (! $canManageContracts && $recipient->opened_at)
+                                    <span class="contract-opened-date">Opened {{ $recipient->opened_at->format('M j, Y g:i A') }}</span>
                                 @endif
                             </div>
                         </div>

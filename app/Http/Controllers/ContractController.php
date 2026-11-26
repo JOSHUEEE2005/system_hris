@@ -39,12 +39,13 @@ class ContractController extends Controller
         $viewer = $request->user();
         $viewer->ensurePersonalContractFolder();
         $canManageContracts = $viewer->hasPermission('contracts.manage');
-        $contracts = Contract::with(['department', 'createdBy'])->latest('sent_at');
+        $contracts = Contract::with(['department', 'createdBy'])->orderByDesc('sent_at')->orderByDesc('id');
 
         if ($canManageContracts) {
             $contracts->withCount([
                 'recipients',
-                'recipients as pending_recipients_count' => fn (Builder $query) => $query->where('status', 'Pending'),
+                'recipients as opened_recipients_count' => fn (Builder $query) => $query->whereNotNull('opened_at'),
+                'recipients as pending_recipients_count' => fn (Builder $query) => $query->whereNull('opened_at'),
             ])->with(['folder', 'recipients.user.department', 'recipients.user.employee.department', 'recipients.user.intern.department']);
         } else {
             $contracts->whereHas('recipients', fn (Builder $query) => $query->where('user_id', $viewer->id))
@@ -60,7 +61,12 @@ class ContractController extends Controller
                 ? ContractFolder::whereNull('user_id')->orderBy('name')->get()
                 : collect(),
             'personalFolders' => $canManageContracts
-                ? ContractFolder::with('user')->whereNotNull('user_id')->orderBy('name')->get()
+                ? ContractFolder::with([
+                    'user' => fn ($query) => $query->withCount([
+                        'contractRecipients',
+                        'contractRecipients as opened_contract_recipients_count' => fn (Builder $recipients) => $recipients->whereNotNull('opened_at'),
+                    ]),
+                ])->whereNotNull('user_id')->orderBy('name')->get()
                 : $viewer->personalContractFolder()->get(),
             'recipients' => $canManageContracts
                 ? $this->recipientCandidateQuery()->with(['department', 'employee.department', 'intern.department'])->orderBy('name')->get()
@@ -243,6 +249,7 @@ class ContractController extends Controller
                 $lockedContract->recipients()->update([
                     'status' => 'Pending',
                     'received_at' => null,
+                    'opened_at' => null,
                 ]);
 
                 $this->audit($request, 'contract.converted', $lockedContract->id, [
@@ -391,6 +398,7 @@ class ContractController extends Controller
                             $existingRecipient->update([
                                 'status' => 'Pending',
                                 'received_at' => null,
+                                'opened_at' => null,
                             ]);
                         }
 
@@ -427,7 +435,7 @@ class ContractController extends Controller
                         'removed' => array_values(array_diff($oldRecipientIds, $recipientIds)),
                         'current' => $recipientIds,
                     ],
-                    'acknowledgements_reset' => $documentChanged,
+                    'opened_status_reset' => $documentChanged,
                 ]);
             });
         } catch (Throwable $exception) {
@@ -467,6 +475,7 @@ class ContractController extends Controller
                     'user_id' => $recipient->user_id,
                     'status' => $recipient->status,
                     'received_at' => $recipient->received_at?->toISOString(),
+                    'opened_at' => $recipient->opened_at?->toISOString(),
                 ])->values()->all(),
             ]);
             $lockedContract->delete();
@@ -490,11 +499,16 @@ class ContractController extends Controller
         if ($request->boolean('original') && $contract->original_pdf_path) {
             $originalPdfPath = Storage::disk('local')->path($contract->original_pdf_path);
             if (is_file($originalPdfPath)) {
-                return response()->file($originalPdfPath, [
+                $response = response()->file($originalPdfPath, [
                     'Content-Type' => 'application/pdf',
                     'Content-Disposition' => 'inline',
                     'X-Content-Type-Options' => 'nosniff',
                 ]);
+                if ($request->boolean('track_open')) {
+                    $this->markOpenedIfRecipient($request, $contract, 'preview');
+                }
+
+                return $response;
             }
         }
         if ($contract->content_html !== null) {
@@ -503,31 +517,46 @@ class ContractController extends Controller
                 : null;
             $html = $documents->personalizeHtml($contract->content_html, $recipient);
 
-            return response($documents->renderHtmlPreview($html), 200, [
+            $response = response($documents->renderHtmlPreview($html), 200, [
                 'Content-Type' => 'text/html; charset=UTF-8',
                 'X-Content-Type-Options' => 'nosniff',
             ]);
+            if ($request->boolean('track_open')) {
+                $this->markOpenedIfRecipient($request, $contract, 'preview');
+            }
+
+            return $response;
         }
+
         abort_unless(in_array($contract->mime_type, self::PREVIEWABLE_MIME_TYPES, true), 415);
 
         $path = Storage::disk('local')->path($contract->storage_path);
         abort_unless(is_file($path), 404);
 
-        return response()->file($path, [
+        $response = response()->file($path, [
             'Content-Type' => $contract->mime_type,
             'X-Content-Type-Options' => 'nosniff',
         ]);
+        if ($request->boolean('track_open')) {
+            $this->markOpenedIfRecipient($request, $contract, 'preview');
+        }
+
+        return $response;
     }
 
     public function download(Request $request, Contract $contract, ContractDocumentService $documents): StreamedResponse
     {
         $this->authorizeAccess($request, $contract);
         if ($contract->original_pdf_path && $request->boolean('original')) {
-            return Storage::disk('local')->download(
+            abort_unless(Storage::disk('local')->exists($contract->original_pdf_path), 404);
+            $response = Storage::disk('local')->download(
                 $contract->original_pdf_path,
                 $contract->title.'-original.pdf',
                 ['Content-Type' => 'application/pdf', 'X-Content-Type-Options' => 'nosniff'],
             );
+            $this->markOpenedIfRecipient($request, $contract, 'download');
+
+            return $response;
         }
         if ($contract->content_html !== null) {
             $format = strtolower((string) $request->query('format', 'pdf'));
@@ -541,7 +570,7 @@ class ContractController extends Controller
                 ? $documents->renderPdf($html)
                 : $documents->renderDocx($html);
 
-            return response()->streamDownload(
+            $response = response()->streamDownload(
                 static function () use ($contents): void {
                     echo $contents;
                 },
@@ -553,31 +582,18 @@ class ContractController extends Controller
                     'X-Content-Type-Options' => 'nosniff',
                 ],
             );
+            $this->markOpenedIfRecipient($request, $contract, 'download');
+
+            return $response;
         }
 
-        return Storage::disk('local')->download($contract->storage_path, $contract->original_filename, [
+        abort_unless(Storage::disk('local')->exists($contract->storage_path), 404);
+        $response = Storage::disk('local')->download($contract->storage_path, $contract->original_filename, [
             'X-Content-Type-Options' => 'nosniff',
         ]);
-    }
+        $this->markOpenedIfRecipient($request, $contract, 'download');
 
-    public function markReceived(Request $request, Contract $contract): RedirectResponse
-    {
-        DB::transaction(function () use ($request, $contract): void {
-            $recipient = ContractRecipient::where('contract_id', $contract->id)
-                ->where('user_id', $request->user()->id)
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            if ($recipient->status === 'Pending') {
-                $recipient->update([
-                    'status' => 'Received',
-                    'received_at' => now(),
-                ]);
-                $this->audit($request, 'contract.received', $contract->id);
-            }
-        });
-
-        return back()->with('status', 'Contract marked as received.');
+        return $response;
     }
 
     private function recipientCandidateQuery(?int $departmentId = null): Builder
@@ -595,6 +611,10 @@ class ContractController extends Controller
                     ->orWhere(function (Builder $query) use ($departmentId): void {
                         $query->whereNull('department_id')
                             ->whereHas('employee', fn (Builder $employee) => $employee->where('department_id', $departmentId));
+                    })
+                    ->orWhere(function (Builder $query) use ($departmentId): void {
+                        $query->whereNull('department_id')
+                            ->whereHas('intern', fn (Builder $intern) => $intern->where('department_id', $departmentId));
                     });
             });
         }
@@ -644,6 +664,31 @@ class ContractController extends Controller
             'entity_id' => (string) $contractId,
             'details' => $details,
         ]);
+    }
+
+    private function markOpenedIfRecipient(Request $request, Contract $contract, string $source): void
+    {
+        DB::transaction(function () use ($request, $contract, $source): void {
+            $recipient = ContractRecipient::where('contract_id', $contract->id)
+                ->where('user_id', $request->user()->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $recipient || $recipient->opened_at) {
+                return;
+            }
+
+            $openedAt = now();
+            $recipient->update([
+                'status' => 'Opened',
+                'opened_at' => $openedAt,
+                'received_at' => null,
+            ]);
+            $this->audit($request, 'contract.opened', $contract->id, [
+                'source' => $source,
+                'opened_at' => $openedAt->toISOString(),
+            ]);
+        });
     }
 
     private function recipientCountLabel(int $count): string

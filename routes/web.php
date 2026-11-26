@@ -47,7 +47,6 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
         Route::get('/contracts', [ContractController::class, 'index'])->name('contracts');
         Route::get('/contracts/{contract}/preview', [ContractController::class, 'preview'])->name('contracts.preview');
         Route::get('/contracts/{contract}/download', [ContractController::class, 'download'])->name('contracts.download');
-        Route::post('/contracts/{contract}/received', [ContractController::class, 'markReceived'])->name('contracts.received');
     });
     Route::get('/leaves', [AdminController::class, 'leavesPage'])->name('leaves');
     Route::get('/onboarding', [AdminController::class, 'onboardingPage'])

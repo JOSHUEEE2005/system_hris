@@ -7,6 +7,7 @@ use App\Models\Contract;
 use App\Models\ContractFolder;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Intern;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\ContractDocumentService;
@@ -91,7 +92,7 @@ class ContractsWorkflowTest extends TestCase
         );
     }
 
-    public function test_hr_can_send_a_private_file_to_selected_employees_and_recipients_can_acknowledge_it(): void
+    public function test_hr_can_send_a_private_file_and_recipient_downloads_are_tracked_as_opened(): void
     {
         $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
         $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
@@ -129,6 +130,7 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('Search employees by name, email, or department')
             ->assertSee('Jamie Rivera')
             ->assertSee('data-personal-folder-filter="'.$recipient->id.'"', false)
+            ->assertSee('0 of 1 opened')
             ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
             ->assertSee('Edit')
             ->assertSee('value="'.$recipient->id.'"', false)
@@ -136,28 +138,65 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('Profile')
             ->assertSee('HR Manager')
             ->assertSee('Log out')
-            ->assertSee('Employment agreement');
+            ->assertSee('Employment agreement')
+            ->assertDontSee('Mark received');
         $this->actingAs($recipient)->get(route('admin.contracts'))
             ->assertOk()
             ->assertSee('Employment agreement')
             ->assertSee('agreement.docx')
-            ->assertSee('Personal folder: Jamie Rivera');
+            ->assertSee('Personal folder: Jamie Rivera')
+            ->assertSee('Not opened');
         $this->actingAs($recipient)->get(route('admin.contracts.download', $contract))
             ->assertDownload('agreement.docx');
-        $this->actingAs($otherUser)->get(route('admin.contracts.download', $contract))->assertForbidden();
-        $this->actingAs($otherUser)->get(route('admin.contracts.preview', $contract))->assertForbidden();
-        $this->actingAs($hr)->get(route('admin.contracts.preview', $contract))->assertStatus(415);
-
-        $this->actingAs($recipient)->post(route('admin.contracts.received', $contract))
-            ->assertRedirect()
-            ->assertSessionHas('status', 'Contract marked as received.');
-
         $this->assertDatabaseHas('contract_recipients', [
             'contract_id' => $contract->id,
             'user_id' => $recipient->id,
-            'status' => 'Received',
+            'status' => 'Opened',
         ]);
-        $this->assertNotNull($contract->recipients()->firstOrFail()->fresh()->received_at);
+        $this->assertNotNull($contract->recipients()->firstOrFail()->fresh()->opened_at);
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('1 of 1 opened')
+            ->assertSee('data-recipient-status-user="'.$recipient->id.'"', false)
+            ->assertSee('Opened');
+        $this->actingAs($otherUser)->get(route('admin.contracts.download', $contract))->assertForbidden();
+        $this->actingAs($otherUser)->get(route('admin.contracts.preview', $contract))->assertForbidden();
+        $this->actingAs($hr)->get(route('admin.contracts.preview', $contract))->assertStatus(415);
+        $this->assertDatabaseHas('audit_logs', [
+            'event_key' => 'contract.opened',
+            'entity_id' => (string) $contract->id,
+        ]);
+    }
+
+    public function test_only_an_explicit_preview_marks_a_contract_opened(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+
+        $this->actingAs($hr)->post(route('admin.contracts.store'), [
+            'title' => 'Preview tracking agreement',
+            'file' => UploadedFile::fake()->create('agreement.pdf', 12, 'application/pdf'),
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id],
+        ])->assertRedirect();
+        $contract = Contract::with('recipients')->firstOrFail();
+
+        $this->actingAs($recipient)->get(route('admin.contracts.preview', $contract))
+            ->assertOk();
+        $this->assertSame('Pending', $contract->recipients()->firstOrFail()->fresh()->status);
+        $this->assertNull($contract->recipients()->firstOrFail()->fresh()->opened_at);
+
+        $this->actingAs($recipient)->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
+            ->assertOk();
+        $openedAt = $contract->recipients()->firstOrFail()->fresh()->opened_at;
+        $this->assertSame('Opened', $contract->recipients()->firstOrFail()->fresh()->status);
+        $this->assertNotNull($openedAt);
+
+        $this->travel(1)->seconds();
+        $this->actingAs($recipient)->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
+            ->assertOk();
+        $this->assertEquals($openedAt, $contract->recipients()->firstOrFail()->fresh()->opened_at);
     }
 
     public function test_department_contracts_are_assigned_to_active_users_in_that_department_only(): void
@@ -167,6 +206,16 @@ class ContractsWorkflowTest extends TestCase
         $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
         $firstRecipient = $this->createUser('DT User 1', 'dt1@example.com', 'employee', $department->id);
         $secondRecipient = $this->createUser('DT User 2', 'dt2@example.com', 'employee', $department->id);
+        $internUser = $this->createUser('DT Intern', 'dt-intern@example.com', 'employee');
+        Intern::create([
+            'intern_no' => 'DT-INT-001',
+            'intern_name' => 'DT Intern',
+            'email' => 'dt-intern@example.com',
+            'department_id' => $department->id,
+            'internship_start_date' => now()->toDateString(),
+            'internship_status' => 'Active',
+            'user_id' => $internUser->id,
+        ]);
         $outsideRecipient = $this->createUser('GA User', 'ga@example.com', 'employee', $otherDepartment->id);
 
         $this->actingAs($hr)->post(route('admin.contracts.store'), [
@@ -175,18 +224,19 @@ class ContractsWorkflowTest extends TestCase
             'recipient_type' => 'department',
             'department_id' => $department->id,
         ])->assertRedirect()
-            ->assertSessionHas('status', 'Contract uploaded and sent to 2 recipients.');
+            ->assertSessionHas('status', 'Contract uploaded and sent to 3 recipients.');
 
         $contract = Contract::with('recipients')->firstOrFail();
         $this->assertSame('department', $contract->recipient_type);
         $this->assertSame($department->id, $contract->department_id);
         $this->assertEqualsCanonicalizing(
-            [$firstRecipient->id, $secondRecipient->id],
+            [$firstRecipient->id, $secondRecipient->id, $internUser->id],
             $contract->recipients->pluck('user_id')->all(),
         );
         $this->assertDatabaseHas('contract_folders', ['user_id' => $firstRecipient->id]);
         $this->assertDatabaseHas('contract_folders', ['user_id' => $secondRecipient->id]);
-        foreach ([$firstRecipient, $secondRecipient] as $recipient) {
+        $this->assertDatabaseHas('contract_folders', ['user_id' => $internUser->id]);
+        foreach ([$firstRecipient, $secondRecipient, $internUser] as $recipient) {
             $this->actingAs($recipient)->get(route('admin.contracts'))
                 ->assertOk()
                 ->assertSee('Department policy')
@@ -576,8 +626,8 @@ class ContractsWorkflowTest extends TestCase
             ->get(route('admin.contracts.preview', $contract))
             ->assertHeader('content-type', 'application/pdf');
         $this->actingAs($recipient)
-            ->post(route('admin.contracts.received', $contract))
-            ->assertRedirect();
+            ->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
+            ->assertOk();
         $oldStoragePath = $contract->storage_path;
         $this->actingAs($hr)->put(route('admin.contracts.update', $contract), [
             'contract_source' => 'editor',
@@ -589,6 +639,7 @@ class ContractsWorkflowTest extends TestCase
         $contract->refresh()->load('recipients');
         Storage::disk('local')->assertMissing($oldStoragePath);
         $this->assertSame('Pending', $contract->recipients->firstOrFail()->status);
+        $this->assertNull($contract->recipients->firstOrFail()->opened_at);
         $this->assertStringContainsString('Updated terms', $contract->content_html);
         $this->actingAs($hr)
             ->get(route('admin.contracts'))
@@ -614,7 +665,9 @@ class ContractsWorkflowTest extends TestCase
 
         $contract = Contract::with('recipients')->firstOrFail();
         $oldStoragePath = $contract->storage_path;
-        $this->actingAs($firstRecipient)->post(route('admin.contracts.received', $contract))->assertRedirect();
+        $this->actingAs($firstRecipient)
+            ->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
+            ->assertOk();
         $this->actingAs($firstRecipient)->put(route('admin.contracts.update', $contract), [])->assertForbidden();
         $this->actingAs($firstRecipient)->delete(route('admin.contracts.destroy', $contract))->assertForbidden();
         $this->actingAs($firstRecipient)->get(route('admin.history'))->assertForbidden();
@@ -639,10 +692,11 @@ class ContractsWorkflowTest extends TestCase
         foreach ($contract->recipients as $recipient) {
             $this->assertSame('Pending', $recipient->status);
             $this->assertNull($recipient->received_at);
+            $this->assertNull($recipient->opened_at);
         }
 
         $updateLog = AuditLog::where('event_key', 'contract.updated')->firstOrFail();
-        $this->assertTrue($updateLog->details['acknowledgements_reset']);
+        $this->assertTrue($updateLog->details['opened_status_reset']);
         $this->assertSame('Original agreement', $updateLog->details['title']['from']);
         $this->assertSame('Updated agreement', $updateLog->details['title']['to']);
         $this->actingAs($hr)->get(route('admin.history'))

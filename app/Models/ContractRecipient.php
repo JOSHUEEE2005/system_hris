@@ -11,11 +11,15 @@ class ContractRecipient extends Model
         'user_id',
         'status',
         'received_at',
+        'opened_at',
     ];
 
     protected function casts(): array
     {
-        return ['received_at' => 'datetime'];
+        return [
+            'received_at' => 'datetime',
+            'opened_at' => 'datetime',
+        ];
     }
 
     public function contract(): BelongsTo
