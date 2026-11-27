@@ -32,6 +32,8 @@ class ContractDocumentService
         'converted-pdf-page',
         'converted-pdf-header',
         'converted-pdf-page-break',
+        'converted-pdf-spacer',
+        'converted-pdf-image',
         'converted-pdf-text',
         'converted-pdf-table',
         'converted-pdf-section-row',
@@ -149,8 +151,18 @@ class ContractDocumentService
     {
         $pdfPath = tempnam(sys_get_temp_dir(), 'contract-pdf-');
         $conversionPath = tempnam(sys_get_temp_dir(), 'contract-pdf-json-');
-        if ($pdfPath === false || $conversionPath === false
+        $scriptPath = tempnam(sys_get_temp_dir(), 'contract-pdf-script-');
+        if ($pdfPath === false || $conversionPath === false || $scriptPath === false
             || file_put_contents($pdfPath, $contents) === false) {
+            if (is_string($pdfPath)) {
+                @unlink($pdfPath);
+            }
+            if (is_string($conversionPath)) {
+                @unlink($conversionPath);
+            }
+            if (is_string($scriptPath)) {
+                @unlink($scriptPath);
+            }
             throw new RuntimeException('The uploaded PDF could not be prepared for conversion.');
         }
 
@@ -158,6 +170,7 @@ class ContractDocumentService
         if (! $this->pdfPythonIsAvailable($python)) {
             @unlink($pdfPath);
             @unlink($conversionPath);
+            @unlink($scriptPath);
             throw new RuntimeException(
                 'Python 3 was not found by the application server. Install Python 3 and PyMuPDF, '
                 .'or set PDF_LAYOUT_PYTHON to the executable path.',
@@ -340,33 +353,73 @@ for page in document:
             continue
         if any(bounds.intersects(box) and bounds.intersect(box).get_area() > bounds.get_area() * 0.3 for box in table_boxes):
             continue
-        blocks.append({"y": bounds.y0, "x": bounds.x0, "width": bounds.width, "text": text})
+        blocks.append({
+            "y": bounds.y0,
+            "x": bounds.x0,
+            "width": bounds.width,
+            "height": bounds.height,
+            "text": text,
+        })
 
-    header = ""
-    if tables:
-        first_table_y = min(table["bbox"][1] for table in tables)
-        has_header_image = any(
-            image["bbox"][1] < first_table_y and image["bbox"][3] > 0
-            for image in page.get_image_info(xrefs=True)
+    image_items = []
+    for image in images:
+        image_rect = pymupdf.Rect(image["bbox"]) & page.rect
+        image_center = pymupdf.Point(
+            image_rect.x0 + image_rect.width / 2,
+            image_rect.y0 + image_rect.height / 2,
         )
-        if has_header_image and first_table_y > 20:
-            clip = pymupdf.Rect(0, 0, page.rect.width, first_table_y)
-            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(1.3, 1.3), clip=clip, alpha=False)
-            header = base64.b64encode(pixmap.tobytes("jpg", jpg_quality=92)).decode("ascii")
-            blocks = [block for block in blocks if block["y"] >= first_table_y]
+        if image in checkbox_images or image_rect.is_empty or any(
+            table_box.contains(image_center) for table_box in table_boxes
+        ):
+            continue
+        pixmap = page.get_pixmap(
+            matrix=pymupdf.Matrix(1.5, 1.5),
+            clip=image_rect,
+            alpha=False,
+        )
+        image_items.append({
+            "y": image_rect.y0,
+            "x": image_rect.x0,
+            "width": image_rect.width,
+            "height": image_rect.height,
+            "image": base64.b64encode(pixmap.tobytes("jpg", jpg_quality=88)).decode("ascii"),
+        })
 
-    items = blocks + [{"y": table["bbox"][1], "x": table["bbox"][0], "table": table} for table in tables]
+    items = blocks + image_items + [
+        {
+            "y": table["bbox"][1],
+            "x": table["bbox"][0],
+            "height": table["bbox"][3] - table["bbox"][1],
+            "table": table,
+        }
+        for table in tables
+    ]
     items.sort(key=lambda item: (item["y"], item["x"]))
-    pages.append({"width": page.rect.width, "height": page.rect.height, "header": header, "items": items})
+    pages.append({
+        "width": page.rect.width,
+        "height": page.rect.height,
+        "header": "",
+        "items": items,
+    })
 
 with open(sys.argv[2], "w", encoding="utf-8") as output:
     json.dump({"pages": pages}, output, ensure_ascii=False)
 PY;
-        $process = new Process([$python, '-c', $script, $pdfPath, $conversionPath]);
-        $process->setTimeout(270);
-        $process->run();
+        if (file_put_contents($scriptPath, $script) === false) {
+            @unlink($pdfPath);
+            @unlink($conversionPath);
+            @unlink($scriptPath);
+            throw new RuntimeException('The PDF conversion script could not be prepared.');
+        }
 
-        @unlink($pdfPath);
+        $process = new Process([$python, $scriptPath, $pdfPath, $conversionPath]);
+        $process->setTimeout(270);
+        try {
+            $process->run();
+        } finally {
+            @unlink($pdfPath);
+            @unlink($scriptPath);
+        }
         if (! $process->isSuccessful()) {
             @unlink($conversionPath);
             $errorOutput = trim($process->getErrorOutput());
@@ -432,17 +485,37 @@ PY;
             $pageHeight = max(1, (float) $page['height']);
             $html .= '<div class="converted-pdf-page" style="width:'.$pageWidth.'pt;min-height:'.$pageHeight.'pt">';
             if (! empty($page['header'])) {
-                $html .= '<img class="converted-pdf-header" src="data:image/jpeg;base64,'.$page['header'].'" alt="Original PDF page header">';
+                $html .= '<img class="converted-pdf-header" src="data:image/jpeg;base64,'.$page['header'].'" alt="Original PDF page header" style="width:'.$pageWidth.'pt">';
             }
+            $previousBottom = 0.0;
             foreach ($page['items'] as $item) {
+                $itemY = max(0, (float) ($item['y'] ?? 0));
+                $gap = max(0, $itemY - $previousBottom);
+                if ($gap >= 1) {
+                    $html .= '<p class="converted-pdf-spacer" style="margin-top:'.number_format($gap, 2, '.', '').'pt"></p>';
+                }
+
                 if (isset($item['table'])) {
                     $html .= $this->renderExtractedPdfTable($item['table'], (float) $page['width']);
+                } elseif (isset($item['image'])) {
+                    $left = max(0, min(100, (float) $item['x'] / $pageWidth * 100));
+                    $width = max(1, min(100 - $left, (float) $item['width'] / $pageWidth * 100));
+                    $imageWidth = max(1, (float) $item['width']);
+                    $html .= '<p class="converted-pdf-text" style="margin-left:'.$left.'%;width:'.$width.'%">'
+                        .'<img class="converted-pdf-image" src="data:image/jpeg;base64,'.$item['image'].'" '
+                        .'alt="Image from original PDF" style="width:'.number_format($imageWidth, 2, '.', '').'pt">'
+                        .'</p>';
                 } else {
                     $text = nl2br(htmlspecialchars((string) $item['text'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
-                    $left = max(0, min(100, (float) $item['x'] / max(1, (float) $page['width']) * 100));
-                    $width = max(1, min(100 - $left, (float) ($item['width'] ?? $page['width']) / max(1, (float) $page['width']) * 100));
+                    $left = max(0, min(100, (float) $item['x'] / $pageWidth * 100));
+                    $width = max(1, min(100 - $left, (float) ($item['width'] ?? $pageWidth) / $pageWidth * 100));
                     $html .= '<p class="converted-pdf-text" style="margin-left:'.$left.'%;width:'.$width.'%">'.$text.'</p>';
                 }
+
+                $previousBottom = max(
+                    $previousBottom,
+                    $itemY + max(0, (float) ($item['height'] ?? 0)),
+                );
             }
             $html .= '</div>';
             if ($pageIndex < count($pages) - 1) {
@@ -845,6 +918,8 @@ PY;
             .'body{font-family:DejaVu Sans,sans-serif;font-size:11pt;line-height:1.45;color:#1f2937}'
             .'p{margin:0 0 10pt}.converted-pdf-page{box-sizing:border-box;width:'.$width.';min-height:0!important;margin:0;border:0;background:#fff;page-break-inside:auto}'
             .'.converted-pdf-header{display:block;width:100%;height:auto;margin:0}'
+            .'.converted-pdf-spacer{height:0;line-height:0;margin:0;padding:0}'
+            .'.converted-pdf-image{display:block;height:auto;max-width:100%}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:6pt;line-height:1.1;margin-top:0;margin-bottom:12pt}'
             .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:6pt}'
@@ -941,6 +1016,7 @@ PY;
         $this->wordImages = [];
         $this->wordImageNamesByHash = [];
         $this->wordDrawingId = 0;
+        $convertedPdfPageSize = $this->convertedPdfPageSize($html);
 
         $document = $this->parseFragment($html);
         $root = $this->fragmentRoot($document);
@@ -1020,8 +1096,12 @@ PY;
                 .'</Relationships>',
             'word/document.xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-                .'<w:body>'.$body.'<w:sectPr>'.$sectionReferences.'<w:pgSz w:w="11906" w:h="16838"/>'
-                .'<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>'
+                .'<w:body>'.$body.'<w:sectPr>'.$sectionReferences
+                .($convertedPdfPageSize === null
+                    ? '<w:pgSz w:w="11906" w:h="16838"/>'
+                        .'<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>'
+                    : '<w:pgSz w:w="'.(int) round($convertedPdfPageSize[0] * 20).'" w:h="'.(int) round($convertedPdfPageSize[1] * 20).'"/>'
+                        .'<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/>')
                 .'</w:sectPr></w:body></w:document>',
             'word/_rels/document.xml.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -1218,6 +1298,12 @@ PY;
                     || $tag === 'col' && $property === 'width'
                     || $tag === 'p' && in_array($property, ['width', 'margin-left'], true))) {
                 $safe[] = $property.':'.$value;
+            } elseif ($tag === 'img' && $property === 'width'
+                && preg_match('/^[0-9]{1,4}(?:\.[0-9]+)?pt$/', $value)) {
+                $safe[] = $property.':'.$value;
+            } elseif ($tag === 'p' && $property === 'margin-top'
+                && preg_match('/^[0-9]{1,4}(?:\.[0-9]+)?pt$/', $value)) {
+                $safe[] = $property.':'.$value;
             } elseif ($tag === 'div' && in_array($property, ['width', 'min-height'], true)
                 && preg_match('/^[0-9]{1,5}(?:\.[0-9]+)?pt$/', $value)) {
                 $safe[] = $property.':'.$value;
@@ -1263,6 +1349,16 @@ PY;
             }
 
             return $page;
+        }
+        if ($tag === 'p' && in_array('converted-pdf-spacer', preg_split('/\s+/', trim($node->getAttribute('class'))), true)) {
+            if (preg_match('/(?:^|;)\s*margin-top\s*:\s*([0-9]+(?:\.[0-9]+)?)pt/i', $node->getAttribute('style'), $match)) {
+                $spacing = (int) round((float) $match[1] * 20);
+
+                return '<w:p><w:pPr><w:spacing w:before="'.$spacing.'" w:after="0" w:line="1" w:lineRule="exact"/></w:pPr>'
+                    .'<w:r><w:rPr><w:sz w:val="2"/><w:vanish/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p>';
+            }
+
+            return '<w:p/>';
         }
         if ($tag === 'ul' || $tag === 'ol') {
             $list = '';
@@ -1528,13 +1624,18 @@ PY;
         $dimensions = function_exists('getimagesizefromstring') ? @getimagesizefromstring($contents) : false;
         $pixelWidth = is_array($dimensions) ? max(1, (int) $dimensions[0]) : 600;
         $pixelHeight = is_array($dimensions) ? max(1, (int) $dimensions[1]) : 200;
-        $scale = min(
-            1,
-            5715000 / ($pixelWidth * 9525),
-            8229600 / ($pixelHeight * 9525),
-        );
-        $width = max(1, (int) round($pixelWidth * 9525 * $scale));
-        $height = max(1, (int) round($pixelHeight * 9525 * $scale));
+        if (preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)pt/i', $image->getAttribute('style'), $widthMatch)) {
+            $width = max(1, (int) round((float) $widthMatch[1] * 12700));
+            $height = max(1, (int) round($width * $pixelHeight / $pixelWidth));
+        } else {
+            $scale = min(
+                1,
+                5715000 / ($pixelWidth * 9525),
+                8229600 / ($pixelHeight * 9525),
+            );
+            $width = max(1, (int) round($pixelWidth * 9525 * $scale));
+            $height = max(1, (int) round($pixelHeight * 9525 * $scale));
+        }
         $drawingId = ++$this->wordDrawingId;
         $description = htmlspecialchars($image->getAttribute('alt'), ENT_XML1 | ENT_QUOTES, 'UTF-8');
 
@@ -1614,6 +1715,8 @@ PY;
             .'h3{font-size:13pt;margin:12pt 0 6pt}table{width:100%;border-collapse:collapse;margin:10pt 0}'
             .'th,td{border:1px solid #111;padding:3pt;text-align:left}th{background:#d3d3d3;color:#111;font-size:8pt}'
             .'.converted-pdf-page{box-sizing:border-box;margin:0 auto 20pt;border:1px solid #d1d5db;background:#fff;box-shadow:0 2px 8px #173b5912;page-break-after:always}.converted-pdf-header{display:block;width:100%;height:auto;margin-bottom:8pt}'
+            .'.converted-pdf-spacer{height:0;line-height:0;margin:0;padding:0}'
+            .'.converted-pdf-image{display:block;height:auto;max-width:100%}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:7pt;line-height:1;margin-top:3pt;margin-bottom:5pt}'
             .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:2pt 3pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:7pt}'

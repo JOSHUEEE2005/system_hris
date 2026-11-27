@@ -79,6 +79,7 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('<w:tblW w:w="6750" w:type="dxa"/>', $documentXml);
         $this->assertStringContainsString('<w:tblInd w:w="941" w:type="dxa"/>', $documentXml);
         $this->assertStringContainsString('<w:tcW w:w="3374" w:type="dxa"/><w:gridSpan w:val="2"/>', $documentXml);
+        $this->assertStringContainsString('<w:pgSz w:w="11906" w:h="16838"/>', $documentXml);
         $this->assertStringContainsString('<w:trHeight w:val="240" w:hRule="atLeast"/>', $documentXml);
         $this->assertStringContainsString("\u{2610}", $documentXml);
         $this->assertStringContainsString('<w:jc w:val="center"/>', $documentXml);
@@ -95,13 +96,18 @@ class ContractsWorkflowTest extends TestCase
     public function test_word_export_preserves_pdf_page_tables_headers_and_page_breaks(): void
     {
         $header = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=';
-        $html = '<div class="converted-pdf-page"><img src="data:image/png;base64,'.$header.'" alt="PDF header">'
+        $html = '<div class="converted-pdf-page" style="width:612pt;min-height:792pt">'
+            .'<img class="converted-pdf-header" src="data:image/png;base64,'.$header.'" alt="PDF header" style="width:612pt">'
+            .'<p class="converted-pdf-spacer" style="margin-top:30pt"></p>'
             .'<p class="converted-pdf-text" style="margin-left:10%;width:80%">Page one</p>'
+            .'<p class="converted-pdf-text"><img class="converted-pdf-image" src="data:image/png;base64,'.$header.'" alt="Signature" style="width:40pt"></p>'
             .'<table><tbody><tr><td>Imported table</td></tr></tbody></table></div>'
             .'<div class="converted-pdf-page-break"></div>'
             .'<div class="converted-pdf-page"><p>Page two</p></div>';
 
-        $docx = app(ContractDocumentService::class)->renderDocx($html);
+        $service = app(ContractDocumentService::class);
+        $html = $service->sanitizeHtml($html);
+        $docx = $service->renderDocx($html);
         $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-test-');
         $this->assertNotFalse($temporaryPath);
         try {
@@ -125,6 +131,11 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('Imported table', $documentXml);
         $this->assertStringContainsString('<w:br w:type="page"/>', $documentXml);
         $this->assertStringContainsString('<pic:pic>', $documentXml);
+        $this->assertStringContainsString('<w:pgSz w:w="12240" w:h="15840"/>', $documentXml);
+        $this->assertStringContainsString('<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0"', $documentXml);
+        $this->assertStringContainsString('<w:spacing w:before="600"', $documentXml);
+        $this->assertStringContainsString('<wp:extent cx="7772400" cy="7772400"/>', $documentXml);
+        $this->assertStringContainsString('<wp:extent cx="508000" cy="508000"/>', $documentXml);
         $this->assertStringContainsString('rIdContractImage1', $relationships);
         $this->assertSame(1, substr_count($contentTypes, 'Extension="png"'));
     }
@@ -190,7 +201,8 @@ class ContractsWorkflowTest extends TestCase
             'user_id' => $recipient->id,
             'status' => 'Opened',
         ]);
-        $this->assertNotNull($contract->recipients()->firstOrFail()->fresh()->opened_at);
+        $openedAt = $contract->recipients()->firstOrFail()->fresh()->opened_at;
+        $this->assertInstanceOf(\DateTimeInterface::class, $openedAt);
         $this->actingAs($hr)->get(route('admin.contracts'))
             ->assertOk()
             ->assertSee('1 of 1 opened')
@@ -445,7 +457,7 @@ class ContractsWorkflowTest extends TestCase
         $contract->refresh();
         $this->assertNotNull($contract->content_html);
         $this->assertStringContainsString('<table class="converted-pdf-table"', $contract->content_html);
-        $this->assertStringContainsString('converted-pdf-header', $contract->content_html);
+        $this->assertStringContainsString('converted-pdf-image', $contract->content_html);
         $this->assertStringContainsString('src="data:image/jpeg;base64,', $contract->content_html);
         $this->assertStringContainsString('rowspan=', $contract->content_html);
         $this->assertStringContainsString('colspan="6"', $contract->content_html);
@@ -464,7 +476,7 @@ class ContractsWorkflowTest extends TestCase
             ->assertOk()
             ->assertHeader('Content-Type', 'text/html; charset=UTF-8')
             ->assertSee('STATUS')
-            ->assertSee('converted-pdf-header');
+            ->assertSee('converted-pdf-image');
 
         $this->actingAs($hr)->get(route('admin.contracts.download', $contract))
             ->assertOk()

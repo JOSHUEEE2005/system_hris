@@ -14,13 +14,10 @@ class ContractRecipient extends Model
         'opened_at',
     ];
 
-    protected function casts(): array
-    {
-        return [
-            'received_at' => 'datetime',
-            'opened_at' => 'datetime',
-        ];
-    }
+    protected $casts = [
+        'received_at' => 'datetime',
+        'opened_at' => 'datetime',
+    ];
 
     public function contract(): BelongsTo
     {
