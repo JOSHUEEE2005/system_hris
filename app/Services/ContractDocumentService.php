@@ -980,7 +980,7 @@ PY;
 
     private function applyConvertedPdfTableColumnWidths(string $html): string
     {
-        if (! str_contains($html, 'converted-pdf-table')) {
+        if (! str_contains($html, 'converted-pdf-table') && ! str_contains($html, 'converted-pdf-layout')) {
             return $html;
         }
 
@@ -989,8 +989,12 @@ PY;
         $changed = false;
 
         foreach ($root->getElementsByTagName('table') as $table) {
-            if (! $table instanceof DOMElement
-                || ! in_array('converted-pdf-table', preg_split('/\s+/', trim($table->getAttribute('class'))), true)) {
+            if (! $table instanceof DOMElement) {
+                continue;
+            }
+            $classes = preg_split('/\s+/', trim($table->getAttribute('class')));
+            if (! in_array('converted-pdf-table', $classes, true)
+                && ! in_array('converted-pdf-layout', $classes, true)) {
                 continue;
             }
 
@@ -1108,7 +1112,7 @@ PY;
             .'.converted-pdf-image{display:block;height:auto;max-width:100%}'
             .'.converted-pdf-layout{width:100%;margin:0;border-collapse:collapse;table-layout:fixed}'
             .'.converted-pdf-layout td{border:0;padding:0;vertical-align:top}'
-            .'.converted-pdf-layout .converted-pdf-text{margin:0}'
+            .'.converted-pdf-layout .converted-pdf-text{margin:0;white-space:nowrap}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:6pt;line-height:1.1;margin-top:0;margin-bottom:12pt}'
             .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:6pt}'
@@ -1941,6 +1945,9 @@ PY;
             .'.converted-pdf-page{box-sizing:border-box;margin:0 auto 20pt;border:1px solid #d1d5db;background:#fff;box-shadow:0 2px 8px #173b5912;page-break-after:always}.converted-pdf-header{display:block;width:100%;height:auto;margin-bottom:8pt}'
             .'.converted-pdf-spacer{height:0;line-height:0;margin:0;padding:0}'
             .'.converted-pdf-image{display:block;height:auto;max-width:100%}'
+            .'.converted-pdf-layout{width:100%;margin:0;border-collapse:collapse;table-layout:fixed}'
+            .'.converted-pdf-layout td{border:0;padding:0;vertical-align:top}'
+            .'.converted-pdf-layout .converted-pdf-text{margin:0;white-space:nowrap}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:7pt;line-height:1;margin-top:3pt;margin-bottom:5pt}'
             .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:2pt 3pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:7pt}'

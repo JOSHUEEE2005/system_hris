@@ -41,6 +41,36 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('converted-pdf-separator-row', $html);
     }
 
+    public function test_converted_pdf_header_layout_preserves_column_widths_without_preview_borders(): void
+    {
+        $service = new ContractDocumentService;
+        $html = '<div class="converted-pdf-page" style="width:612pt;min-height:792pt">'
+            .'<table class="converted-pdf-layout" style="width:100%;margin-left:0%"><colgroup>'
+            .'<col style="width:10%"><col style="width:55%"><col style="width:35%">'
+            .'</colgroup><tbody><tr><td></td><td><p class="converted-pdf-text">Logo</p></td>'
+            .'<td><p class="converted-pdf-text">Header label</p></td></tr></tbody></table></div>';
+        $method = new \ReflectionMethod(ContractDocumentService::class, 'applyConvertedPdfTableColumnWidths');
+        $method->setAccessible(true);
+        $pdfHtml = $method->invoke($service, $html);
+
+        $document = new \DOMDocument;
+        $this->assertTrue($document->loadHTML($pdfHtml));
+        $widthCells = (new \DOMXPath($document))->query(
+            '//table[@class="converted-pdf-layout"]/tbody/tr[1]/td',
+        );
+        $this->assertSame(3, $widthCells->length);
+        $widths = [];
+        foreach ($widthCells as $cell) {
+            preg_match('/(?:^|;)\s*width:([0-9.]+)%/', $cell->getAttribute('style'), $match);
+            $widths[] = $match[1] ?? null;
+        }
+        $this->assertSame(['10', '55', '35'], $widths);
+
+        $preview = $service->renderHtmlPreview($html);
+        $this->assertStringContainsString('.converted-pdf-layout td{border:0;padding:0;vertical-align:top}', $preview);
+        $this->assertStringContainsString('.converted-pdf-layout .converted-pdf-text{margin:0;white-space:nowrap}', $preview);
+    }
+
     public function test_pdf_export_converts_legacy_png_images_when_gd_is_unavailable(): void
     {
         if (extension_loaded('gd')) {
