@@ -39,7 +39,9 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     Route::get('/users', [AdminController::class, 'usersPage'])
         ->middleware('permission:users.manage|employees.manage')
         ->name('users');
-    Route::get('/calendar', [AdminController::class, 'calendarPage'])->name('calendar');
+    Route::get('/calendar', [AdminController::class, 'calendarPage'])
+        ->middleware('permission:users.manage|employees.manage')
+        ->name('calendar');
     Route::get('/history', [AuditHistoryController::class, 'index'])
         ->middleware('permission:audit.view')
         ->name('history');

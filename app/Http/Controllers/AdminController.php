@@ -11,8 +11,11 @@ use App\Models\OnboardingRequest;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
@@ -97,14 +100,86 @@ class AdminController extends Controller
         $year = (int) ($data['year'] ?? now()->year);
         $month = (int) ($data['month'] ?? now()->month);
         $selectedMonth = now()->startOfYear()->setYear($year)->setMonth($month);
+        $viewMode = $data['view'] ?? 'month';
+        $calendarStart = $viewMode === 'year' ? $selectedMonth->copy()->startOfYear() : $selectedMonth->copy()->startOfMonth();
+        $calendarEnd = $viewMode === 'year' ? $selectedMonth->copy()->endOfYear() : $selectedMonth->copy()->endOfMonth();
+        $today = now()->startOfDay();
+        $upcomingThrough = $today->copy()->addDays(30);
+        $rangeStart = $calendarStart->lessThan($today) ? $calendarStart : $today;
+        $rangeEnd = $calendarEnd->greaterThan($upcomingThrough) ? $calendarEnd : $upcomingThrough;
+        $calendarEvents = $this->employmentCalendarEvents($rangeStart, $rangeEnd);
+        $todayDate = $today->toDateString();
+        $upcomingThroughDate = $upcomingThrough->toDateString();
+        $calendarEventCountsByMonth = $calendarEvents
+            ->filter(fn (array $event): bool => str_starts_with($event['date'], (string) $year))
+            ->countBy(fn (array $event): int => (int) substr($event['date'], 5, 2));
 
         return view('admin.calendar', [
-            'viewMode' => $data['view'] ?? 'month',
+            'viewMode' => $viewMode,
             'selectedMonth' => $selectedMonth,
             'selectedYear' => $year,
             'minimumCalendarYear' => 1900,
             'maximumCalendarYear' => 2100,
+            'calendarEventsByDate' => $calendarEvents->groupBy('date'),
+            'calendarEventCountsByMonth' => $calendarEventCountsByMonth,
+            'todayEvents' => $calendarEvents->where('date', $todayDate)->values(),
+            'upcomingEvents' => $calendarEvents
+                ->filter(fn (array $event): bool => $event['date'] > $todayDate && $event['date'] <= $upcomingThroughDate)
+                ->values(),
         ]);
+    }
+
+    private function employmentCalendarEvents(Carbon $rangeStart, Carbon $rangeEnd): Collection
+    {
+        $startDate = $rangeStart->toDateString();
+        $endDate = $rangeEnd->toDateString();
+        $events = collect();
+        $addEvent = static function (?Carbon $date, string $kind, string $eventType, string $name) use ($events): void {
+            if (! $date) {
+                return;
+            }
+
+            $events->push([
+                'date' => $date->toDateString(),
+                'date_label' => $date->format('M j'),
+                'event_type' => $eventType,
+                'kind' => $kind,
+                'label' => $kind === 'start' ? 'START' : 'END',
+                'name' => $name,
+            ]);
+        };
+
+        Employee::query()
+            ->where(function (Builder $query): void {
+                $query->whereNull('employment_type')->orWhere('employment_type', '!=', 'Internship');
+            })
+            ->where(function (Builder $query) use ($startDate, $endDate): void {
+                $query->whereBetween('hire_date', [$startDate, $endDate])
+                    ->orWhereBetween('last_date', [$startDate, $endDate]);
+            })
+            ->get(['first_name', 'middle_name', 'last_name', 'full_name', 'hire_date', 'last_date'])
+            ->each(function (Employee $employee) use ($addEvent): void {
+                $name = trim((string) ($employee->full_name ?: implode(' ', array_filter([
+                    $employee->first_name,
+                    $employee->middle_name,
+                    $employee->last_name,
+                ]))));
+                $addEvent($employee->hire_date, 'start', 'Employment start', $name);
+                $addEvent($employee->last_date, 'end', 'End of employment', $name);
+            });
+
+        Intern::query()
+            ->where(function (Builder $query) use ($startDate, $endDate): void {
+                $query->whereBetween('internship_start_date', [$startDate, $endDate])
+                    ->orWhereBetween('internship_end_date', [$startDate, $endDate]);
+            })
+            ->get(['intern_name', 'internship_start_date', 'internship_end_date'])
+            ->each(function (Intern $intern) use ($addEvent): void {
+                $addEvent($intern->internship_start_date, 'start', 'Internship start', $intern->intern_name);
+                $addEvent($intern->internship_end_date, 'end', 'Internship end', $intern->intern_name);
+            });
+
+        return $events->sortBy(fn (array $event): string => $event['date'].'-'.($event['kind'] === 'start' ? '0' : '1').'-'.$event['name'])->values();
     }
 
     public function leavesPage(): View

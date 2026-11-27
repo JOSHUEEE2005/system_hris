@@ -146,7 +146,9 @@
         ><span class="sa-icon">⌂</span><span class="sa-nav-label">HOME</span></a>
         @if ($canAccessAdminHome)
             <a class="{{ request()->routeIs('admin.users') ? 'active' : '' }}" href="{{ route('admin.users') }}"><span class="sa-icon">♙</span><span class="sa-nav-label">User</span></a>
-            <a class="{{ request()->routeIs('admin.calendar') ? 'active' : '' }}" href="{{ route('admin.calendar') }}"><span class="sa-icon">▣</span><span class="sa-nav-label">Calendar</span></a>
+            @if ($viewer->hasPermission('users.manage') || $viewer->hasPermission('employees.manage'))
+                <a class="{{ request()->routeIs('admin.calendar') ? 'active' : '' }}" href="{{ route('admin.calendar') }}"><span class="sa-icon">▣</span><span class="sa-nav-label">Calendar</span></a>
+            @endif
             <a class="{{ request()->routeIs('admin.contracts*') ? 'active' : '' }}" href="{{ route('admin.contracts') }}"><span class="sa-icon">♧</span><span class="sa-nav-label">Contracts</span></a>
             <a class="{{ request()->routeIs('admin.leaves') ? 'active' : '' }}" href="{{ route('admin.leaves') }}"><span class="sa-icon">♙</span><span class="sa-nav-label">Leaves</span></a>
             <a class="{{ request()->routeIs('admin.onboarding') ? 'active' : '' }}" href="{{ route('admin.onboarding') }}"><span class="sa-icon">☑</span><span class="sa-nav-label">Onboarding</span></a>

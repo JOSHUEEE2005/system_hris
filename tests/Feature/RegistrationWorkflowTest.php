@@ -185,13 +185,34 @@ class RegistrationWorkflowTest extends TestCase
             'status' => 'Active',
         ]);
         $admin->roles()->attach(Role::where('slug', 'super-admin')->firstOrFail());
+        Employee::create([
+            'employee_no' => 'CAL-EMP-001',
+            'first_name' => 'Calendar',
+            'last_name' => 'Employee',
+            'full_name' => 'Calendar Employee',
+            'employment_type' => 'Employment',
+            'hire_date' => '2026-11-05',
+            'last_date' => '2026-11-29',
+        ]);
+        Intern::create([
+            'intern_no' => 'CAL-INT-001',
+            'intern_name' => 'Calendar Intern',
+            'internship_start_date' => '2026-11-12',
+            'internship_end_date' => '2026-11-30',
+        ]);
 
         $this->actingAs($admin)
             ->get(route('admin.calendar', ['view' => 'month', 'year' => 2026, 'month' => 11]))
             ->assertOk()
             ->assertSee('November, 2026')
             ->assertSee('month=10', false)
-            ->assertSee('month=12', false);
+            ->assertSee('month=12', false)
+            ->assertSee('Employment start')
+            ->assertSee('End of employment')
+            ->assertSee('Internship start')
+            ->assertSee('Internship end')
+            ->assertSee('Calendar Employee')
+            ->assertSee('Calendar Intern');
 
         $this->actingAs($admin)
             ->get(route('admin.calendar', ['view' => 'year', 'year' => 2026]))
@@ -199,8 +220,19 @@ class RegistrationWorkflowTest extends TestCase
             ->assertSee('Calendar of Events:')
             ->assertSee('January')
             ->assertSee('December')
+            ->assertSee('4 dates')
             ->assertSee('year=2025', false)
             ->assertSee('year=2027', false);
+
+        $employeeUser = User::create([
+            'name' => 'Calendar Viewer',
+            'email' => 'calendar-viewer@example.com',
+            'password_hash' => Hash::make('StrongPass123!'),
+            'email_verified_at' => now(),
+            'status' => 'Active',
+        ]);
+        $employeeUser->roles()->attach(Role::where('slug', 'employee')->firstOrFail());
+        $this->actingAs($employeeUser)->get(route('admin.calendar'))->assertForbidden();
     }
 
     public function test_super_admin_can_create_a_linked_employee_profile_with_hr_fields(): void
