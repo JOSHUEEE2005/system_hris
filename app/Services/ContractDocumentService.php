@@ -348,11 +348,32 @@ for page in document:
 
     table_boxes = [pymupdf.Rect(table["bbox"]) for table in tables]
     blocks = []
-    for block in page.get_text("blocks", sort=True):
-        bounds = pymupdf.Rect(block[:4])
-        text = (block[4] or "").strip()
-        if not text:
+    for block in page.get_text("dict", sort=True)["blocks"]:
+        if "lines" not in block:
             continue
+        visible_spans = []
+        text_lines = []
+        for line in block["lines"]:
+            visible_line_spans = [
+                span for span in line["spans"]
+                if (span.get("text") or "").strip()
+            ]
+            if not visible_line_spans:
+                continue
+            visible_spans.extend(visible_line_spans)
+            line_text = "".join(span.get("text", "") for span in line["spans"]).strip()
+            if line_text:
+                text_lines.append(line_text)
+        text = "\n".join(text_lines)
+        if not text or not visible_spans:
+            continue
+        span_rectangles = [pymupdf.Rect(span["bbox"]) for span in visible_spans]
+        bounds = pymupdf.Rect(
+            min(rect.x0 for rect in span_rectangles),
+            min(rect.y0 for rect in span_rectangles),
+            max(rect.x1 for rect in span_rectangles),
+            max(rect.y1 for rect in span_rectangles),
+        )
         if any(bounds.intersects(box) and bounds.intersect(box).get_area() > bounds.get_area() * 0.3 for box in table_boxes):
             continue
         blocks.append({
@@ -1661,14 +1682,29 @@ PY;
 
     private function wordParagraphIndent(DOMElement $element): string
     {
-        if (! preg_match('/(?:^|;)\s*margin-left\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $element->getAttribute('style'), $match)) {
+        $style = $element->getAttribute('style');
+        if (! preg_match('/(?:^|;)\s*margin-left\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $style, $match)) {
             return '';
         }
 
         $indentBase = $this->wordConvertedPageWidthTwips ?? 9026;
-        $indent = (int) round($indentBase * min(90, max(0, (float) $match[1])) / 100);
+        $maxIndentPercent = $this->wordConvertedPageWidthTwips === null ? 90 : 100;
+        $indent = (int) round($indentBase * min($maxIndentPercent, max(0, (float) $match[1])) / 100);
+        $rightIndent = null;
+        if ($this->wordConvertedPageWidthTwips !== null
+            && preg_match('/(?:^|;)\s*width\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $style, $widthMatch)) {
+            $contentWidth = (int) round(
+                $this->wordConvertedPageWidthTwips * min(100, max(0.1, (float) $widthMatch[1])) / 100,
+            );
+            $rightIndent = max(0, $this->wordConvertedPageWidthTwips - $indent - $contentWidth);
+        }
 
-        return $indent > 0 ? '<w:ind w:left="'.$indent.'"/>' : '';
+        if ($indent === 0 && $rightIndent === null) {
+            return '';
+        }
+
+        return '<w:ind'.($indent > 0 ? ' w:left="'.$indent.'"' : '')
+            .($rightIndent !== null ? ' w:right="'.$rightIndent.'"' : '').'/>';
     }
 
     private function wordRun(string $text, array $format = []): string

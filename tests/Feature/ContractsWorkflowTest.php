@@ -133,7 +133,7 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('<pic:pic>', $documentXml);
         $this->assertStringContainsString('<w:pgSz w:w="12240" w:h="15840"/>', $documentXml);
         $this->assertStringContainsString('<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0"', $documentXml);
-        $this->assertStringContainsString('<w:ind w:left="1224"/>', $documentXml);
+        $this->assertStringContainsString('<w:ind w:left="1224" w:right="1224"/>', $documentXml);
         $this->assertStringContainsString('<w:tblW w:w="9792" w:type="dxa"/>', $documentXml);
         $this->assertStringContainsString('<w:tblInd w:w="1224" w:type="dxa"/>', $documentXml);
         $this->assertStringContainsString('<w:spacing w:before="600"', $documentXml);
