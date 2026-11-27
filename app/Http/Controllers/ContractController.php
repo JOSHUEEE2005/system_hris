@@ -67,6 +67,20 @@ class ContractController extends Controller
                         ->withCount([
                             'contractRecipients',
                             'contractRecipients as opened_contract_recipients_count' => fn (Builder $recipients) => $recipients->whereNotNull('opened_at'),
+                            'contractRecipients as completed_contract_recipients_count' => fn (Builder $recipients) => $recipients
+                                ->where(function (Builder $query) {
+                                    $query->where('status', 'Approved')
+                                        ->orWhere(function (Builder $query) {
+                                            $query->whereNotNull('opened_at')
+                                                ->whereHas('contract', fn (Builder $contracts) => $contracts->where('response_mode', 'as_is'));
+                                        });
+                                }),
+                            'contractRecipients as employee_action_contract_recipients_count' => fn (Builder $recipients) => $recipients
+                                ->whereIn('status', ['Pending', 'Opened'])
+                                ->whereHas('contract', fn (Builder $contracts) => $contracts->where('response_mode', 'requires_return')),
+                            'contractRecipients as hr_review_contract_recipients_count' => fn (Builder $recipients) => $recipients
+                                ->whereIn('status', ['Submitted', 'Changes Requested'])
+                                ->whereHas('contract', fn (Builder $contracts) => $contracts->where('response_mode', 'requires_return')),
                         ]),
                 ])->whereNotNull('user_id')->orderBy('name')->get()
                 : $viewer->personalContractFolder()->get(),

@@ -319,7 +319,7 @@ const openPersonalContracts = (trigger) => {
         header.append(contractTitle, date);
 
         const mode = document.createElement('p');
-        mode.className = 'contract-recipient-contract-mode';
+        mode.className = `contract-recipient-contract-mode ${responseRequired ? 'response-required' : 'final-copy'}`;
         mode.textContent = responseRequired
             ? 'Return requested · HR approval required'
             : 'Final copy · no response needed';
@@ -327,10 +327,29 @@ const openPersonalContracts = (trigger) => {
         const status = document.createElement('p');
         status.className = 'contract-recipient-contract-status';
         const isAwaitingApproval = responseRequired && recipientStatusLabel === 'Submitted for review';
+        const needsRevision = recipientStatusLabel === 'Revision requested';
+        const awaitingEmployee = responseRequired && (
+            recipientStatusLabel === 'Action needed'
+            || recipientStatusLabel === 'Return needed'
+            || recipientStatusLabel === 'Not opened yet'
+            || recipientStatusLabel.startsWith('Opened')
+        );
+        const isCompleted = recipientStatusLabel === 'Approved'
+            || (!responseRequired && recipientStatusLabel.startsWith('Opened'));
         status.textContent = isAwaitingApproval
             ? 'Sent for approval · awaiting HR review'
-            : `Status: ${recipientStatusLabel}`;
-        status.classList.toggle('approval-pending', isAwaitingApproval);
+            : needsRevision
+                ? 'Revision requested · see HR feedback'
+                : `Status: ${recipientStatusLabel}`;
+        status.classList.add(
+            isAwaitingApproval || needsRevision
+                ? 'hr-review'
+                : awaitingEmployee
+                    ? 'employee-action'
+                    : isCompleted
+                        ? 'complete'
+                        : 'neutral',
+        );
 
         const openDetails = document.createElement('button');
         openDetails.type = 'button';

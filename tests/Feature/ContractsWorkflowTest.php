@@ -101,7 +101,8 @@ class ContractsWorkflowTest extends TestCase
             ->assertOk()
             ->assertSee('data-contract-response-mode="requires_return"', false)
             ->assertSee('personal-contracts-modal', false)
-            ->assertSee('data-personal-contracts-open aria-haspopup="dialog"', false);
+            ->assertSee('data-personal-contracts-open aria-haspopup="dialog"', false)
+            ->assertSee('1 employee action');
     }
 
     public function test_returned_contract_can_be_revised_and_approved_for_one_recipient_only(): void
@@ -147,7 +148,9 @@ class ContractsWorkflowTest extends TestCase
         $this->assertSame('Submitted', $recipientRecord->fresh()->status);
         $this->actingAs($hr)->get(route('admin.contracts'))
             ->assertOk()
-            ->assertSee('Preview submitted file')
+            ->assertSee('View submitted file')
+            ->assertSee('Open the version they sent to HR')
+            ->assertSee('1 HR / revision')
             ->assertSee('Approve')
             ->assertSee('Request revision');
 

@@ -99,9 +99,12 @@
                             default => 'Action needed',
                         };
                         $recipientStatusClass = match ($recipient?->status) {
-                            'Changes Requested' => 'revision',
                             'Approved' => 'opened',
-                            default => 'pending',
+                            'Submitted' => 'review',
+                            'Changes Requested' => 'revision',
+                            default => $contract->response_mode === 'requires_return'
+                                ? 'pending'
+                                : ($recipient?->opened_at ? 'opened' : 'neutral'),
                         };
                     @endphp
                     <article
@@ -166,14 +169,29 @@
                                     @foreach ($contract->recipients as $contractRecipient)
                                         <div class="contract-recipient-status" data-recipient-status-user="{{ $contractRecipient->user_id }}" hidden>
                                             <strong>{{ $contractRecipient->user?->name ?? 'Former user' }}</strong>
-                                            <span class="{{ match ($contractRecipient->status) { 'Approved' => 'opened', 'Changes Requested' => 'revision', 'Submitted' => 'pending', default => $contractRecipient->opened_at ? 'opened' : 'pending' } }}">
+                                            <span class="{{ match (true) {
+                                                $contractRecipient->status === 'Approved' => 'opened',
+                                                $contractRecipient->status === 'Submitted' => 'review',
+                                                $contractRecipient->status === 'Changes Requested' => 'revision',
+                                                $contract->response_mode === 'requires_return' => 'pending',
+                                                $contractRecipient->opened_at !== null => 'opened',
+                                                default => 'neutral',
+                                            } }}">
                                                 {{ $contractRecipient->status === 'Approved' ? 'Approved' : ($contractRecipient->status === 'Submitted' ? 'Submitted for review' : ($contractRecipient->status === 'Changes Requested' ? 'Revision requested' : ($contractRecipient->opened_at ? 'Opened '.$contractRecipient->opened_at->format('M j, Y g:i A') : 'Not opened yet'))) }}
                                             </span>
                                             @if ($contract->response_mode === 'requires_return' && $contractRecipient->returned_storage_path)
                                                 @if (in_array($contractRecipient->returned_mime_type, $previewableMimeTypes, true))
-                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.preview', [$contract, $contractRecipient]) }}" target="_blank" rel="noopener">Preview submitted file</a>
+                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.preview', [$contract, $contractRecipient]) }}" target="_blank" rel="noopener">
+                                                        <span class="contract-review-download-icon" aria-hidden="true">FILE</span>
+                                                        <span class="contract-review-download-copy"><strong>View submitted file</strong><small>Open the version they sent to HR</small></span>
+                                                        <span class="contract-review-download-action">OPEN</span>
+                                                    </a>
                                                 @else
-                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.download', [$contract, $contractRecipient]) }}">Download submitted file</a>
+                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.download', [$contract, $contractRecipient]) }}">
+                                                        <span class="contract-review-download-icon" aria-hidden="true">FILE</span>
+                                                        <span class="contract-review-download-copy"><strong>Download submitted file</strong><small>This file type cannot be previewed here</small></span>
+                                                        <span class="contract-review-download-action">DOWNLOAD</span>
+                                                    </a>
                                                 @endif
                                             @endif
                                             @if ($contract->response_mode === 'requires_return' && $contractRecipient->review_feedback)
@@ -291,6 +309,11 @@
                 <section class="contract-personal-folders">
                     <h3>Employee contracts</h3>
                     <p>Select a recipient’s folder to see the contracts sent to them and their opening progress.</p>
+                    <div class="contract-status-legend" aria-label="Contract status color key">
+                        <span class="complete">Completed / approved</span>
+                        <span class="employee-action">Waiting on employee</span>
+                        <span class="hr-review">With HR / revision needed</span>
+                    </div>
                     <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="">
                         <span class="contract-personal-folder-name">All recipient folders</span>
                         <small>{{ $personalFolders->count() }} folders</small>
@@ -316,14 +339,31 @@
                                             $totalContracts = $folder->user?->contract_recipients_count ?? 0;
                                             $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
                                             $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
+                                            $completedContracts = $folder->user?->completed_contract_recipients_count ?? 0;
+                                            $employeeActionContracts = $folder->user?->employee_action_contract_recipients_count ?? 0;
+                                            $hrReviewContracts = $folder->user?->hr_review_contract_recipients_count ?? 0;
+                                            $progressColor = $hrReviewContracts > 0
+                                                ? '#ea580c'
+                                                : ($employeeActionContracts > 0 ? '#eab308' : ($completedContracts > 0 ? '#16a34a' : '#94a3b8'));
                                         @endphp
                                         <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" data-personal-contracts-open aria-haspopup="dialog" aria-controls="personal-contracts-modal">
                                             <span class="contract-personal-folder-name">{{ $folder->user?->name ?? $folder->name }}</span>
                                             <small>{{ $totalContracts }} {{ $totalContracts === 1 ? 'contract' : 'contracts' }}</small>
-                                            <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%">
+                                            <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%; --progress-color: {{ $progressColor }}">
                                                 <span>{{ $progress }}%</span>
                                             </span>
                                             <small>{{ $openedContracts }} opened</small>
+                                            <span class="contract-personal-folder-status-summary" aria-label="Contract status counts">
+                                                @if ($completedContracts > 0)
+                                                    <span class="complete">{{ $completedContracts }} complete</span>
+                                                @endif
+                                                @if ($employeeActionContracts > 0)
+                                                    <span class="employee-action">{{ $employeeActionContracts }} employee action</span>
+                                                @endif
+                                                @if ($hrReviewContracts > 0)
+                                                    <span class="hr-review">{{ $hrReviewContracts }} HR / revision</span>
+                                                @endif
+                                            </span>
                                         </button>
                                     @endforeach
                                 </nav>
