@@ -97,6 +97,11 @@ class ContractsWorkflowTest extends TestCase
             'contract_id' => $contract->id,
             'user_id' => $inactive->id,
         ]);
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('data-contract-response-mode="requires_return"', false)
+            ->assertSee('personal-contracts-modal', false)
+            ->assertSee('data-personal-contracts-open aria-haspopup="dialog"', false);
     }
 
     public function test_returned_contract_can_be_revised_and_approved_for_one_recipient_only(): void
@@ -409,11 +414,15 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('Search employees by name, email, or department')
             ->assertSee('Jamie Rivera')
             ->assertSee('data-personal-folder-filter="'.$recipient->id.'"', false)
+            ->assertSee('data-personal-contracts-open', false)
             ->assertSee('0 opened')
             ->assertSee('1 not opened')
             ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
+            ->assertSee('data-contract-response-mode="as_is"', false)
             ->assertSee('Edit')
             ->assertSee('Open contract')
+            ->assertSee('personal-contracts-modal', false)
+            ->assertSee('personal-contracts-list', false)
             ->assertSee('contract-details-modal', false)
             ->assertSee('value="'.$recipient->id.'"', false)
             ->assertSee('Notifications')

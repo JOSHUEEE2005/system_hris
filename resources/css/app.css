@@ -692,6 +692,17 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
 }
 .contract-modal-panel.contract-modal-panel-wide { width: min(1040px, 100%); }
 .contract-details-panel { width: min(760px, 100%); }
+.contract-recipient-contracts-panel { width: min(680px, 100%); }
+.contract-recipient-contract-list { display: grid; max-height: min(70vh, 640px); gap: 10px; overflow-y: auto; padding: 20px; }
+.contract-recipient-contract-row { display: grid; gap: 8px; border: 1px solid #dfe7ed; border-radius: 9px; background: #f9fbfc; padding: 13px 15px; }
+.contract-recipient-contract-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.contract-recipient-contract-header h3 { margin: 0; color: var(--navy); font-size: 13px; font-weight: 800; }
+.contract-recipient-contract-date { flex: none; color: #8193a2; font-size: 10px; }
+.contract-recipient-contract-mode, .contract-recipient-contract-status { margin: 0; color: #587489; font-size: 11px; }
+.contract-recipient-contract-mode { font-weight: 700; }
+.contract-recipient-contract-status.approval-pending { color: #956000; font-weight: 800; }
+.contract-recipient-contract-row .contract-action-secondary { justify-self: start; }
+.contract-recipient-contract-empty { margin: 0; padding: 12px 4px; color: #71889a; font-size: 12px; }
 .contract-details-body { max-height: min(70vh, 680px); overflow-y: auto; padding: 20px; }
 .contract-details-section + .contract-details-section { margin-top: 22px; border-top: 1px solid #e8eef3; padding-top: 18px; }
 .contract-details-section h3 { margin: 0 0 10px; color: #31566f; font-size: 12px; font-weight: 800; }

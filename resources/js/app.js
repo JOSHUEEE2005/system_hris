@@ -60,6 +60,10 @@ if (themeToggle instanceof HTMLButtonElement) {
 
 const contractModal = document.getElementById('contract-modal');
 const contractModalPanel = contractModal?.querySelector('.contract-modal-panel');
+const personalContractsModal = document.getElementById('personal-contracts-modal');
+const personalContractsTitle = document.getElementById('personal-contracts-title');
+const personalContractsDescription = document.getElementById('personal-contracts-description');
+const personalContractsList = document.getElementById('personal-contracts-list');
 const contractDetailsModal = document.getElementById('contract-details-modal');
 const contractDetailsTitle = document.getElementById('contract-details-title');
 const contractDetailsDescription = document.getElementById('contract-details-description');
@@ -103,6 +107,7 @@ const contractRecipientOptions = [...document.querySelectorAll('[data-contract-r
 const contractResponseModeInputs = [...document.querySelectorAll('input[name="response_mode"]')];
 const noContractRecipientsMatch = document.getElementById('contract-recipient-search-empty');
 let contractEditorRange = null;
+let personalContractsTrigger = null;
 let contractDetailsTrigger = null;
 let contractDetailsMovedNodes = [];
 
@@ -240,6 +245,12 @@ const closeContractDetails = (restoreFocus = true) => {
     if (!(contractDetailsModal instanceof HTMLElement) || contractDetailsModal.hidden) return;
     restoreContractDetailsNodes();
     contractDetailsModal.hidden = true;
+    selectedPersonalContractUser = '';
+    contractCards.forEach((card) => {
+        card.querySelectorAll('[data-recipient-status-user]').forEach((detail) => {
+            detail.hidden = false;
+        });
+    });
     if (!(contractModal instanceof HTMLElement) || contractModal.hidden) {
         document.body.style.overflow = '';
     }
@@ -247,7 +258,103 @@ const closeContractDetails = (restoreFocus = true) => {
     contractDetailsTrigger = null;
 };
 
-const openContractDetails = (trigger) => {
+const closePersonalContracts = (restoreFocus = true) => {
+    if (!(personalContractsModal instanceof HTMLElement) || personalContractsModal.hidden) return;
+    personalContractsModal.hidden = true;
+    if (!(contractModal instanceof HTMLElement) || contractModal.hidden) {
+        document.body.style.overflow = '';
+    }
+    if (restoreFocus) personalContractsTrigger?.focus();
+    personalContractsTrigger = null;
+};
+
+const openPersonalContracts = (trigger) => {
+    if (
+        !(personalContractsModal instanceof HTMLElement)
+        || !(personalContractsList instanceof HTMLElement)
+    ) return;
+
+    const userId = trigger.dataset.personalFolderFilter || '';
+    if (!userId) return;
+
+    const name = trigger.querySelector('.contract-personal-folder-name')?.textContent?.trim() || 'Recipient';
+    const matchingCards = contractCards.filter((card) => (
+        (card.dataset.recipientUserIds || '').split(',').includes(userId)
+    ));
+
+    if (personalContractsTitle instanceof HTMLElement) {
+        personalContractsTitle.textContent = `Contracts sent to ${name}`;
+    }
+    if (personalContractsDescription instanceof HTMLElement) {
+        personalContractsDescription.textContent = 'See each contract, whether a response is required, and its current HR approval status.';
+    }
+    personalContractsList.replaceChildren();
+
+    if (matchingCards.length === 0) {
+        const emptyMessage = document.createElement('p');
+        emptyMessage.className = 'contract-recipient-contract-empty';
+        emptyMessage.textContent = 'No contracts have been sent to this recipient yet.';
+        personalContractsList.append(emptyMessage);
+    }
+
+    matchingCards.forEach((card) => {
+        const recipientStatus = [...card.querySelectorAll('[data-recipient-status-user]')]
+            .find((detail) => detail.dataset.recipientStatusUser === userId);
+        if (!(recipientStatus instanceof HTMLElement)) return;
+
+        const title = card.querySelector('.contract-title-row h3')?.textContent?.trim() || 'Untitled contract';
+        const sentDate = card.querySelector('.contract-card-meta span')?.textContent?.trim() || '';
+        const responseRequired = card.dataset.contractResponseMode === 'requires_return';
+        const recipientStatusLabel = recipientStatus.querySelector('span')?.textContent?.trim() || 'Action needed';
+        const row = document.createElement('article');
+        row.className = 'contract-recipient-contract-row';
+
+        const header = document.createElement('div');
+        header.className = 'contract-recipient-contract-header';
+        const contractTitle = document.createElement('h3');
+        contractTitle.textContent = title;
+        const date = document.createElement('span');
+        date.className = 'contract-recipient-contract-date';
+        date.textContent = sentDate;
+        header.append(contractTitle, date);
+
+        const mode = document.createElement('p');
+        mode.className = 'contract-recipient-contract-mode';
+        mode.textContent = responseRequired
+            ? 'Return requested · HR approval required'
+            : 'Final copy · no response needed';
+
+        const status = document.createElement('p');
+        status.className = 'contract-recipient-contract-status';
+        const isAwaitingApproval = responseRequired && recipientStatusLabel === 'Submitted for review';
+        status.textContent = isAwaitingApproval
+            ? 'Sent for approval · awaiting HR review'
+            : `Status: ${recipientStatusLabel}`;
+        status.classList.toggle('approval-pending', isAwaitingApproval);
+
+        const openDetails = document.createElement('button');
+        openDetails.type = 'button';
+        openDetails.className = 'contract-action-secondary';
+        openDetails.textContent = responseRequired ? 'Review contract' : 'View contract';
+        openDetails.addEventListener('click', () => {
+            const detailsTrigger = card.querySelector('[data-contract-details-open]');
+            closePersonalContracts(false);
+            if (detailsTrigger instanceof HTMLElement) {
+                openContractDetails(detailsTrigger, trigger, userId);
+            }
+        });
+
+        row.append(header, mode, status, openDetails);
+        personalContractsList.append(row);
+    });
+
+    personalContractsTrigger = trigger;
+    personalContractsModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    personalContractsModal.querySelector('[data-close-personal-contracts]')?.focus();
+};
+
+const openContractDetails = (trigger, focusTrigger = trigger, recipientUserId = '') => {
     if (
         !(contractDetailsModal instanceof HTMLElement)
         || !(contractDetailsRecipientSlot instanceof HTMLElement)
@@ -255,8 +362,12 @@ const openContractDetails = (trigger) => {
     ) return;
 
     closeContractDetails(false);
+    selectedPersonalContractUser = recipientUserId;
     const card = trigger.closest('[data-contract-card]');
     if (!(card instanceof HTMLElement)) return;
+    card.querySelectorAll('[data-recipient-status-user]').forEach((detail) => {
+        detail.hidden = Boolean(recipientUserId) && detail.dataset.recipientStatusUser !== recipientUserId;
+    });
 
     const title = card.querySelector('.contract-title-row h3')?.textContent?.trim() || 'Contract';
     const recipientDetails = card.querySelector('[data-contract-recipient-status-list]');
@@ -281,7 +392,7 @@ const openContractDetails = (trigger) => {
 
     moveIntoModal(recipientDetails, contractDetailsRecipientSlot);
     moveIntoModal(contractActions, contractDetailsActionsSlot);
-    contractDetailsTrigger = trigger;
+    contractDetailsTrigger = focusTrigger;
     contractDetailsModal.hidden = false;
     document.body.style.overflow = 'hidden';
     contractDetailsModal.querySelector('[data-close-contract-details]')?.focus();
@@ -404,12 +515,17 @@ contractEditButtons.forEach((button) => {
 contractDetailsModal?.querySelectorAll('[data-close-contract-details]').forEach((button) => {
     button.addEventListener('click', () => closeContractDetails());
 });
+personalContractsModal?.querySelectorAll('[data-close-personal-contracts]').forEach((button) => {
+    button.addEventListener('click', () => closePersonalContracts());
+});
 contractModal?.querySelectorAll('[data-close-contract-modal]').forEach((button) => {
     button.addEventListener('click', closeContractModal);
 });
 document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (contractDetailsModal instanceof HTMLElement && !contractDetailsModal.hidden) {
+    if (personalContractsModal instanceof HTMLElement && !personalContractsModal.hidden) {
+        closePersonalContracts();
+    } else if (contractDetailsModal instanceof HTMLElement && !contractDetailsModal.hidden) {
         closeContractDetails();
     } else if (contractModal instanceof HTMLElement && !contractModal.hidden) {
         closeContractModal();
@@ -617,13 +733,15 @@ contractShowAllButton?.addEventListener('click', () => {
 
 personalContractFolderFilters.forEach((button) => {
     button.addEventListener('click', () => {
+        if (button.hasAttribute('data-personal-contracts-open')) {
+            openPersonalContracts(button);
+            return;
+        }
+
         selectedPersonalContractUser = button.dataset.personalFolderFilter || '';
         selectedContractFolder = 'all';
         contractFolderFilters.forEach((filter) => {
             filter.setAttribute('aria-pressed', String(filter.dataset.contractFolderFilter === 'all'));
-        });
-        personalContractFolderFilters.forEach((folderFilter) => {
-            folderFilter.setAttribute('aria-pressed', String(folderFilter === button));
         });
         filterContractCards();
     });
@@ -634,9 +752,6 @@ contractFolderFilters.forEach((button) => {
     button.addEventListener('click', () => {
         selectedContractFolder = button.dataset.contractFolderFilter || 'all';
         selectedPersonalContractUser = '';
-        personalContractFolderFilters.forEach((folderFilter) => {
-            folderFilter.setAttribute('aria-pressed', String(folderFilter.dataset.personalFolderFilter === ''));
-        });
         contractFolderFilters.forEach((filter) => {
             filter.setAttribute('aria-pressed', String(filter === button));
         });

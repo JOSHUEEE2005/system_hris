@@ -110,6 +110,7 @@
                         data-contract-index="{{ $loop->index }}"
                         data-folder-id="{{ $contract->folder_id ?? '' }}"
                         data-contract-created-by="{{ $contract->created_by ?? '' }}"
+                        data-contract-response-mode="{{ $contract->response_mode }}"
                         data-recipient-user-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
                     >
@@ -290,7 +291,7 @@
                 <section class="contract-personal-folders">
                     <h3>Employee contracts</h3>
                     <p>Select a recipient’s folder to see the contracts sent to them and their opening progress.</p>
-                    <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="" aria-pressed="true">
+                    <button class="contract-personal-folder-item contract-personal-folder-all" type="button" data-personal-folder-filter="">
                         <span class="contract-personal-folder-name">All recipient folders</span>
                         <small>{{ $personalFolders->count() }} folders</small>
                     </button>
@@ -316,7 +317,7 @@
                                             $openedContracts = $folder->user?->opened_contract_recipients_count ?? 0;
                                             $progress = $totalContracts > 0 ? (int) round($openedContracts / $totalContracts * 100) : 0;
                                         @endphp
-                                        <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" aria-pressed="false">
+                                        <button class="contract-personal-folder-item" type="button" data-personal-folder-filter="{{ $folder->user_id }}" data-personal-contracts-open aria-haspopup="dialog" aria-controls="personal-contracts-modal">
                                             <span class="contract-personal-folder-name">{{ $folder->user?->name ?? $folder->name }}</span>
                                             <small>{{ $totalContracts }} {{ $totalContracts === 1 ? 'contract' : 'contracts' }}</small>
                                             <span class="contract-personal-folder-progress" role="progressbar" aria-label="Contracts opened by {{ $folder->user?->name ?? $folder->name }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ $progress }}" style="--progress: {{ $progress }}%">
@@ -335,6 +336,21 @@
     </main>
 
     @if ($canManageContracts)
+        <div id="personal-contracts-modal" class="contract-modal" hidden>
+            <button class="contract-modal-backdrop" type="button" data-close-personal-contracts aria-label="Close dialog"></button>
+            <section class="contract-modal-panel contract-recipient-contracts-panel" role="dialog" aria-modal="true" aria-labelledby="personal-contracts-title" aria-describedby="personal-contracts-description">
+                <header class="contract-modal-header">
+                    <div>
+                        <span class="contract-modal-eyebrow">EMPLOYEE CONTRACTS</span>
+                        <h2 id="personal-contracts-title">Contracts sent to recipient</h2>
+                        <p id="personal-contracts-description">Review the contracts sent to this employee or intern and their approval status.</p>
+                    </div>
+                    <button class="contract-modal-close" type="button" data-close-personal-contracts aria-label="Close">×</button>
+                </header>
+                <div class="contract-recipient-contract-list" id="personal-contracts-list"></div>
+            </section>
+        </div>
+
         <div id="contract-details-modal" class="contract-modal" hidden>
             <button class="contract-modal-backdrop" type="button" data-close-contract-details aria-label="Close dialog"></button>
             <section class="contract-modal-panel contract-details-panel" role="dialog" aria-modal="true" aria-labelledby="contract-details-title" aria-describedby="contract-details-description">
