@@ -1,6 +1,9 @@
 <x-admin-layout title="Contracts">
     @php
         $previewableMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        $createdByMeCount = $canManageContracts
+            ? $contracts->where('created_by', auth()->id())->count()
+            : 0;
     @endphp
 
     <section class="sa-head">
@@ -46,6 +49,9 @@
             @endif
             <nav class="contract-folder-filters" aria-label="Filter contracts by folder">
                 <button class="contract-folder-filter" type="button" data-contract-folder-filter="all" aria-pressed="true">All contracts</button>
+                <button class="contract-folder-filter contract-created-folder" type="button" data-contract-folder-filter="created-by-me" aria-pressed="false">
+                    <span aria-hidden="true">▰</span> My created contracts <span class="contract-folder-count">{{ $createdByMeCount }}</span>
+                </button>
                 <button class="contract-folder-filter" type="button" data-contract-folder-filter="unfiled" aria-pressed="false">Unfiled</button>
                 @foreach ($folders as $folder)
                     <button class="contract-folder-filter" type="button" data-contract-folder-filter="{{ $folder->id }}" aria-pressed="false">{{ $folder->name }}</button>
@@ -59,7 +65,7 @@
             <div class="{{ $canManageContracts ? 'contract-manager-content' : '' }}">
                 @if ($contracts->isNotEmpty())
                     <div class="contract-section-heading-row">
-                        <h3 class="contract-section-heading">{{ $canManageContracts ? 'Recently sent' : 'Recently sent to you' }}</h3>
+                        <h3 class="contract-section-heading" @if ($canManageContracts) data-contract-view-heading @endif>{{ $canManageContracts ? 'Recently sent' : 'Recently sent to you' }}</h3>
                         @if ($canManageContracts && $contracts->count() > 4)
                             <button class="contract-show-all" type="button" data-contract-show-all aria-expanded="false">View all {{ $contracts->count() }} contracts</button>
                         @endif
@@ -72,7 +78,7 @@
                         <p>{{ $canManageContracts ? 'Add a contract to make it available in the selected employees’ portal.' : 'When HR sends you a contract, it will appear here.' }}</p>
                     </div>
                 @else
-                    <div class="contract-grid {{ $canManageContracts ? 'contract-grid-recent' : '' }}" id="contract-grid" @if ($canManageContracts) data-contract-limit="4" @endif>
+                    <div class="contract-grid {{ $canManageContracts ? 'contract-grid-recent' : '' }}" id="contract-grid" @if ($canManageContracts) data-contract-limit="4" data-current-user-id="{{ auth()->id() }}" @endif>
                         @foreach ($contracts as $contract)
                     @php
                         $isTemplate = $contract->content_html !== null;
@@ -87,6 +93,7 @@
                         data-contract-card
                         data-contract-index="{{ $loop->index }}"
                         data-folder-id="{{ $contract->folder_id ?? '' }}"
+                        data-contract-created-by="{{ $contract->created_by ?? '' }}"
                         data-recipient-user-ids="{{ $contract->recipients->pluck('user_id')->implode(',') }}"
                         data-search="{{ strtolower($contract->title.' '.$contract->original_filename.' '.($departmentName ?? '')) }}"
                     >

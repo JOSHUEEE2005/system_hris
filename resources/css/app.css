@@ -485,6 +485,8 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
     font-size: 10px;
     font-weight: 700;
 }
+.contract-created-folder { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; }
+.contract-folder-count { display: inline-grid; min-width: 18px; height: 18px; place-items: center; border-radius: 999px; background: #edf3f7; padding: 0 5px; font-size: 9px; }
 .contract-folder-filter[aria-pressed="true"] { border-color: var(--navy); background: #e8f2f8; color: var(--navy); }
 .contract-manager-browser { display: flex; flex-direction: column; gap: 20px; margin-top: 16px; }
 .contract-personal-folders { min-width: 0; }

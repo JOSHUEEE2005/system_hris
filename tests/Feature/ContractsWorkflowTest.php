@@ -406,6 +406,24 @@ class ContractsWorkflowTest extends TestCase
         $this->assertSame($folder->id, $contract->folder_id);
         $this->assertSame('2026 Agreements', $contract->folder->name);
 
+        Contract::create([
+            'title' => 'Another HR agreement',
+            'original_filename' => 'another-agreement.docx',
+            'storage_path' => 'contracts/another-agreement.docx',
+            'mime_type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'file_size' => 100,
+            'recipient_type' => 'individual',
+            'created_by' => $anotherHrManager->id,
+            'sent_at' => now(),
+        ]);
+
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('My created contracts')
+            ->assertSee('data-contract-folder-filter="created-by-me"', false)
+            ->assertSee('data-contract-created-by="'.$hr->id.'"', false)
+            ->assertSee('data-contract-created-by="'.$anotherHrManager->id.'"', false);
+
         $this->actingAs($anotherHrManager)->get(route('admin.contracts'))
             ->assertOk()
             ->assertSee('2026 Agreements')

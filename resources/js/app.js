@@ -472,6 +472,7 @@ const contractFolderFilters = [...document.querySelectorAll('[data-contract-fold
 const personalContractFolderFilters = [...document.querySelectorAll('[data-personal-folder-filter]')];
 const contractGrid = document.getElementById('contract-grid');
 const contractShowAllButton = document.querySelector('[data-contract-show-all]');
+const contractViewHeading = document.querySelector('[data-contract-view-heading]');
 let selectedContractFolder = 'all';
 let selectedPersonalContractUser = '';
 let showAllContracts = false;
@@ -480,6 +481,7 @@ const filterContractCards = () => {
     const query = contractSearch instanceof HTMLInputElement ? contractSearch.value.trim().toLowerCase() : '';
     const hasActiveFilter = Boolean(query || selectedContractFolder !== 'all' || selectedPersonalContractUser);
     const recentLimit = Number(contractGrid?.dataset.contractLimit || 0);
+    const currentUserId = contractGrid?.dataset.currentUserId || '';
     const isCompactRecent = recentLimit > 0
         && contractCards.length > recentLimit
         && !showAllContracts
@@ -491,6 +493,7 @@ const filterContractCards = () => {
     contractCards.forEach((card) => {
         const matchesSearch = card.dataset.search.includes(query);
         const matchesFolder = selectedContractFolder === 'all'
+            || (selectedContractFolder === 'created-by-me' && card.dataset.contractCreatedBy === currentUserId)
             || (selectedContractFolder === 'unfiled' && !card.dataset.folderId)
             || card.dataset.folderId === selectedContractFolder;
         const recipientUserIds = (card.dataset.recipientUserIds || '').split(',');
@@ -510,6 +513,12 @@ const filterContractCards = () => {
 
     if (noContractCardsMatch instanceof HTMLElement) {
         noContractCardsMatch.hidden = contractCards.length === 0 || visibleCount !== 0;
+    }
+
+    if (contractViewHeading instanceof HTMLElement) {
+        contractViewHeading.textContent = selectedContractFolder === 'created-by-me'
+            ? 'Contracts created by you'
+            : 'Recently sent';
     }
 
     if (contractShowAllButton instanceof HTMLButtonElement && recentLimit > 0) {
