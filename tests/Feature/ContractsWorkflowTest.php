@@ -101,7 +101,7 @@ class ContractsWorkflowTest extends TestCase
             .'<p class="converted-pdf-spacer" style="margin-top:30pt"></p>'
             .'<p class="converted-pdf-text" style="margin-left:10%;width:80%">Page one</p>'
             .'<p class="converted-pdf-text"><img class="converted-pdf-image" src="data:image/png;base64,'.$header.'" alt="Signature" style="width:40pt"></p>'
-            .'<table><tbody><tr><td>Imported table</td></tr></tbody></table></div>'
+            .'<table style="width:80%;margin-left:10%"><tbody><tr><td>Imported table</td></tr></tbody></table></div>'
             .'<div class="converted-pdf-page-break"></div>'
             .'<div class="converted-pdf-page"><p>Page two</p></div>';
 
@@ -133,6 +133,9 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('<pic:pic>', $documentXml);
         $this->assertStringContainsString('<w:pgSz w:w="12240" w:h="15840"/>', $documentXml);
         $this->assertStringContainsString('<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0"', $documentXml);
+        $this->assertStringContainsString('<w:ind w:left="1224"/>', $documentXml);
+        $this->assertStringContainsString('<w:tblW w:w="9792" w:type="dxa"/>', $documentXml);
+        $this->assertStringContainsString('<w:tblInd w:w="1224" w:type="dxa"/>', $documentXml);
         $this->assertStringContainsString('<w:spacing w:before="600"', $documentXml);
         $this->assertStringContainsString('<wp:extent cx="7772400" cy="7772400"/>', $documentXml);
         $this->assertStringContainsString('<wp:extent cx="508000" cy="508000"/>', $documentXml);

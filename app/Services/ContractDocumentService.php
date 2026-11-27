@@ -21,6 +21,8 @@ class ContractDocumentService
 
     private int $wordDrawingId = 0;
 
+    private ?int $wordConvertedPageWidthTwips = null;
+
     private const ALLOWED_TAGS = [
         'a', 'b', 'blockquote', 'br', 'col', 'colgroup', 'div', 'em', 'footer', 'h1', 'h2',
         'h3', 'header', 'i', 'li', 'ol', 'p', 's', 'span', 'strong',
@@ -1017,6 +1019,9 @@ PY;
         $this->wordImageNamesByHash = [];
         $this->wordDrawingId = 0;
         $convertedPdfPageSize = $this->convertedPdfPageSize($html);
+        $this->wordConvertedPageWidthTwips = $convertedPdfPageSize === null
+            ? null
+            : (int) round($convertedPdfPageSize[0] * 20);
 
         $document = $this->parseFragment($html);
         $root = $this->fragmentRoot($document);
@@ -1430,8 +1435,11 @@ PY;
         if (preg_match('/(?:^|;)\s*margin-left\s*:\s*([0-9]+(?:\.[0-9]+)?)%/i', $table->getAttribute('style'), $marginMatch)) {
             $marginLeftPercent = min(100, max(0, (float) $marginMatch[1]));
         }
-        $tableWidth = max(1, (int) round(9000 * $tableWidthPercent / 100));
-        $tableIndent = max(0, (int) round(11906 * $marginLeftPercent / 100) - 1440);
+        $tableWidthBase = $this->wordConvertedPageWidthTwips ?? 9000;
+        $tableWidth = max(1, (int) round($tableWidthBase * $tableWidthPercent / 100));
+        $tableIndent = $this->wordConvertedPageWidthTwips === null
+            ? max(0, (int) round(11906 * $marginLeftPercent / 100) - 1440)
+            : max(0, (int) round($this->wordConvertedPageWidthTwips * $marginLeftPercent / 100));
 
         $gridColumns = '';
         $columnWidths = [];
@@ -1657,7 +1665,8 @@ PY;
             return '';
         }
 
-        $indent = (int) round(9026 * min(90, max(0, (float) $match[1])) / 100);
+        $indentBase = $this->wordConvertedPageWidthTwips ?? 9026;
+        $indent = (int) round($indentBase * min(90, max(0, (float) $match[1])) / 100);
 
         return $indent > 0 ? '<w:ind w:left="'.$indent.'"/>' : '';
     }
