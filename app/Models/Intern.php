@@ -14,6 +14,7 @@ class Intern extends Model
         'email',
         'birth_date',
         'internship_start_date',
+        'period',
         'internship_end_date',
         'gender',
         'department_id',

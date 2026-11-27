@@ -685,6 +685,8 @@ class ContractsWorkflowTest extends TestCase
             'email' => 'jamie@example.com',
             'department_id' => $department->id,
             'position' => 'HR Analyst',
+            'hire_date' => '2026-02-01',
+            'period' => '6 months',
         ]);
         $recipient->update(['employee_id' => $employee->id]);
 
@@ -692,12 +694,14 @@ class ContractsWorkflowTest extends TestCase
             ->assertOk()
             ->assertSee('Insert table')
             ->assertSee('Add header')
-            ->assertSee('Add footer');
+            ->assertSee('Add footer')
+            ->assertSee('Starting Date')
+            ->assertSee('Period');
 
         $this->actingAs($hr)->post(route('admin.contracts.store'), [
             'contract_source' => 'editor',
             'title' => 'Employment agreement',
-            'content_html' => '<header><p>Confidential: [Department]</p></header><h1>Hi [User Full Name]</h1><table><thead><tr><th>Employee</th><th>ID</th></tr></thead><tbody><tr><td>[User Full Name]</td><td>[Employee ID]</td></tr></tbody></table><p>[Work Email] · [Department] · [Designation] · [Role] · [Status]</p><footer><p>Contact: [Work Email]</p></footer><script>window.alert(1)</script>',
+            'content_html' => '<header><p>Confidential: [Department]</p></header><h1>Hi [User Full Name]</h1><table><thead><tr><th>Employee</th><th>ID</th></tr></thead><tbody><tr><td>[User Full Name]</td><td>[Employee ID]</td></tr></tbody></table><p>[Work Email] · [Department] · [Designation] · [Starting Date] · [Period] · [Role] · [Status]</p><footer><p>Contact: [Work Email]</p></footer><script>window.alert(1)</script>',
             'recipient_type' => 'individual',
             'recipient_ids' => [$recipient->id],
         ])->assertRedirect()
@@ -717,6 +721,8 @@ class ContractsWorkflowTest extends TestCase
         $this->assertStringContainsString('Chamber Services', $personalized);
         $this->assertStringContainsString('EMP-105', $personalized);
         $this->assertStringContainsString('HR Analyst', $personalized);
+        $this->assertStringContainsString('February 1, 2026', $personalized);
+        $this->assertStringContainsString('6 months', $personalized);
         $this->assertStringContainsString((string) Role::where('slug', 'employee')->value('name'), $personalized);
         $this->assertStringContainsString('Active', $personalized);
         $docxContents = app(ContractDocumentService::class)->renderDocx($personalized);
@@ -778,6 +784,24 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('Create contract')
             ->assertSee('User Full Name')
             ->assertSee('Employment agreement');
+    }
+
+    public function test_personalized_start_date_and_period_support_intern_recipients(): void
+    {
+        $user = $this->createUser('Jordan Lee', 'jordan@example.com', 'employee');
+        Intern::create([
+            'intern_no' => 'INT-START-001',
+            'intern_name' => 'Jordan Lee',
+            'email' => 'jordan@example.com',
+            'internship_start_date' => '2026-03-15',
+            'period' => '12 weeks',
+            'user_id' => $user->id,
+        ]);
+
+        $personalized = app(ContractDocumentService::class)
+            ->personalizeHtml('[Starting Date] / [Period]', $user);
+
+        $this->assertSame('March 15, 2026 / 12 weeks', $personalized);
     }
 
     public function test_hr_can_edit_and_delete_contracts_and_review_the_changes_in_system_history(): void

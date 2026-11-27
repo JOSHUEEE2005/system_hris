@@ -218,6 +218,8 @@ class RegistrationWorkflowTest extends TestCase
         $this->actingAs($admin)->get(route('admin.users'))
             ->assertOk()
             ->assertSee('Account access')
+            ->assertSee('Starting date')
+            ->assertSee('name="period"', false)
             ->assertSee('Create user');
 
         $this->actingAs($admin)->post(route('admin.users.with-employee.store'), [
@@ -234,6 +236,7 @@ class RegistrationWorkflowTest extends TestCase
             'department_id' => $department->id,
             'position' => 'HR Analyst',
             'hire_date' => '2026-11-18',
+            'period' => '6 months',
             'regularized_date' => '2027-05-18',
             'employment_status' => 'Active project based',
             'hmo_status' => 'Upon regularization',
@@ -257,6 +260,7 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('Filipino', $employee->nationality);
         $this->assertSame('HR Analyst', $employee->position);
         $this->assertSame('2026-11-18', $employee->hire_date->format('Y-m-d'));
+        $this->assertSame('6 months', $employee->period);
         $this->assertSame('2027-05-18', $employee->regularized_date->format('Y-m-d'));
         $this->assertSame('Active project based', $employee->employment_status);
         $this->assertSame('Upon regularization', $employee->hmo_status);
@@ -368,6 +372,7 @@ class RegistrationWorkflowTest extends TestCase
             'department_id' => $department->id,
             'position' => 'Content Intern',
             'internship_start_date' => '2026-11-18',
+            'period' => '12 weeks',
             'birth_date' => '2004-01-15',
             'gender' => 'Female',
             'internship_status' => 'Active',
@@ -383,6 +388,7 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('Jordan Lee', $intern->intern_name);
         $this->assertSame('Communications Intern', $intern->designation);
         $this->assertSame('Content Intern', $intern->position);
+        $this->assertSame('12 weeks', $intern->period);
         $this->assertSame('Female', $intern->gender);
         $this->assertSame($department->id, $intern->department_id);
         $this->assertSame($user->id, $intern->user_id);
@@ -439,6 +445,7 @@ class RegistrationWorkflowTest extends TestCase
             'first_name' => 'After',
             'last_name' => 'Updated',
             'hire_date' => '2025-01-01',
+            'period' => '12 months',
             'regularized_date' => '2024-12-31',
             'last_date' => '2024-12-30',
             'employment_status' => 'Active OIO',
@@ -483,6 +490,7 @@ class RegistrationWorkflowTest extends TestCase
             'middle_name' => 'Marie',
             'last_name' => 'Updated',
             'hire_date' => '2025-01-01',
+            'period' => 'Permanent',
             'regularized_date' => '2025-06-01',
             'last_date' => '2025-07-01',
             'employment_status' => 'Active OIO',
@@ -496,6 +504,7 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('Policy Officer', $employee->position);
         $this->assertSame('after.edit@example.com', $employee->email);
         $this->assertSame('after.edit@example.com', $user->email);
+        $this->assertSame('Permanent', $employee->period);
         $this->assertSame('2025-06-01', $employee->regularized_date->format('Y-m-d'));
         $this->assertSame('2025-07-01', $employee->last_date->format('Y-m-d'));
         $this->assertSame('Disabled', $user->status);
@@ -542,6 +551,7 @@ class RegistrationWorkflowTest extends TestCase
                 'intern_name' => 'Casey Updated',
                 'designation' => 'Research Intern',
                 'internship_start_date' => '2026-01-01',
+                'period' => '6 months',
                 'internship_end_date' => '2025-12-31',
                 'internship_status' => 'Finished',
             ])
@@ -561,6 +571,7 @@ class RegistrationWorkflowTest extends TestCase
             'intern_name' => 'Casey Updated',
             'designation' => 'Research Intern',
             'internship_start_date' => '2026-01-01',
+            'period' => '8 months',
             'internship_status' => 'Finished',
         ])->assertRedirect()
             ->assertSessionHas('status', 'User profile updated.');
@@ -570,6 +581,7 @@ class RegistrationWorkflowTest extends TestCase
         $this->assertSame('EDIT-INT-002', $intern->intern_no);
         $this->assertSame('Casey Updated', $intern->intern_name);
         $this->assertSame('Research Intern', $intern->designation);
+        $this->assertSame('8 months', $intern->period);
         $this->assertSame('casey.updated@example.com', $intern->email);
         $this->assertSame('casey.updated@example.com', $user->email);
     }

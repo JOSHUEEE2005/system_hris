@@ -63,6 +63,7 @@
                                                 'intern_no' => $record->intern->intern_no,
                                                 'intern_name' => $record->intern->intern_name,
                                                 'designation' => $record->intern->designation,
+                                                'period' => $record->intern->period,
                                                 'birth_date' => $record->intern->birth_date?->format('Y-m-d'),
                                                 'internship_start_date' => $record->intern->internship_start_date?->format('Y-m-d'),
                                                 'internship_end_date' => $record->intern->internship_end_date?->format('Y-m-d'),
@@ -88,6 +89,7 @@
                                                 'position' => $record->employee->position,
                                                 'immediate_supervisor' => $record->employee->immediate_supervisor,
                                                 'personal_email' => $record->employee->personal_email,
+                                                'period' => $record->employee->period,
                                                 'birth_date' => $record->employee->birth_date?->format('Y-m-d'),
                                                 'hire_date' => $record->employee->hire_date?->format('Y-m-d'),
                                                 'regularized_date' => $record->employee->regularized_date?->format('Y-m-d'),
@@ -170,6 +172,7 @@
                         <div class="sa-field"><label for="modal-email"><span data-email-label>Office email address</span> <span>*</span></label><input id="modal-email" type="email" name="email" value="{{ old('email') }}" autocomplete="email" maxlength="150" required><small>Used as the account sign-in email.</small></div>
                         <div class="sa-field"><label for="modal-gender">Gender</label><select id="modal-gender" name="gender"><option value="">Select gender</option><option value="Male" @selected(old('gender') === 'Male')>Male</option><option value="Female" @selected(old('gender') === 'Female')>Female</option></select></div>
                         <div class="sa-field"><label for="modal-position">Position <span>*</span></label><input id="modal-position" name="position" value="{{ old('position') }}" maxlength="100" required></div>
+                        <div class="sa-field"><label for="modal-period">Period</label><input id="modal-period" name="period" value="{{ old('period') }}" maxlength="100"></div>
                         <div class="sa-field"><label for="modal-supervisor">HOD / immediate supervisor</label><input id="modal-supervisor" name="immediate_supervisor" value="{{ old('immediate_supervisor') }}" maxlength="200"></div>
                         <div class="sa-field"><label for="modal-personal-email">Personal email</label><input id="modal-personal-email" type="email" name="personal_email" value="{{ old('personal_email') }}" maxlength="150"></div>
                         <div class="sa-field"><label for="modal-birth-date"><span data-birth-label>Birth date</span></label><input id="modal-birth-date" type="date" name="birth_date" value="{{ old('birth_date') }}" data-birth-date></div>
@@ -184,7 +187,7 @@
                             <div class="sa-field"><label for="modal-middle-name">Middle name</label><input id="modal-middle-name" name="middle_name" value="{{ old('middle_name') }}" maxlength="100"></div>
                             <div class="sa-field"><label for="modal-nationality">Nationality</label><input id="modal-nationality" name="nationality" value="{{ old('nationality') }}" maxlength="100"></div>
                             <div class="sa-field"><label for="modal-full-name">Full name</label><input id="modal-full-name" value="{{ old('full_name') }}" readonly data-full-name></div>
-                            <div class="sa-field"><label for="modal-hire-date">Date hired <span>*</span></label><input id="modal-hire-date" type="date" name="hire_date" value="{{ old('hire_date') }}" data-required="employee" data-tenure-date></div>
+                            <div class="sa-field"><label for="modal-hire-date">Starting date <span>*</span></label><input id="modal-hire-date" type="date" name="hire_date" value="{{ old('hire_date') }}" data-required="employee" data-tenure-date></div>
                             <div class="sa-field"><label for="modal-regularized-date">Date regularized</label><input id="modal-regularized-date" type="date" name="regularized_date" value="{{ old('regularized_date') }}"></div>
                             <div class="sa-field sa-derived-field"><label>Tenure in months / years</label><output data-tenure-output>—</output></div>
                             <div class="sa-field"><label for="modal-employment-status">Employment status <span>*</span></label><select id="modal-employment-status" name="employment_status" data-required="employee"><option value="">Select status</option>@foreach(['Active', 'Resigned', 'Active OIO', 'Active project based', 'Active agency'] as $employmentStatus)<option value="{{ $employmentStatus }}" @selected(old('employment_status', 'Active') === $employmentStatus)>{{ $employmentStatus }}</option>@endforeach</select></div>
@@ -215,7 +218,7 @@
                             <div class="sa-field"><label for="modal-intern-no">Intern number <span>*</span></label><input id="modal-intern-no" name="intern_no" value="{{ old('intern_no') }}" maxlength="30" data-required="intern"></div>
                             <div class="sa-field"><label for="modal-intern-name">Intern name <span>*</span></label><input id="modal-intern-name" name="intern_name" value="{{ old('intern_name') }}" maxlength="255" data-required="intern"></div>
                             <div class="sa-field"><label for="modal-intern-designation">Designation <span>*</span></label><input id="modal-intern-designation" name="designation" value="{{ old('designation') }}" maxlength="150" data-required="intern"></div>
-                            <div class="sa-field"><label for="modal-intern-start">Start of internship <span>*</span></label><input id="modal-intern-start" type="date" name="internship_start_date" value="{{ old('internship_start_date') }}" data-required="intern" data-tenure-date></div>
+                            <div class="sa-field"><label for="modal-intern-start">Starting date <span>*</span></label><input id="modal-intern-start" type="date" name="internship_start_date" value="{{ old('internship_start_date') }}" data-required="intern" data-tenure-date></div>
                             <div class="sa-field"><label for="modal-intern-end">End of internship</label><input id="modal-intern-end" type="date" name="internship_end_date" value="{{ old('internship_end_date') }}" data-tenure-end></div>
                             <div class="sa-field sa-derived-field"><label>Tenure in months</label><output data-tenure-output>—</output></div>
                             <div class="sa-field"><label for="modal-intern-address">Address</label><input id="modal-intern-address" name="intern_address" value="{{ old('intern_address') }}" maxlength="10000"></div>

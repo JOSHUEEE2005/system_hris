@@ -327,6 +327,8 @@
                                 <option value="[Department]">Department</option>
                                 <option value="[Employee ID]">Employee ID</option>
                                 <option value="[Designation]">Designation / Position</option>
+                                <option value="[Starting Date]">Starting Date</option>
+                                <option value="[Period]">Period</option>
                                 <option value="[Role]">Role</option>
                                 <option value="[Status]">Status</option>
                             </select>

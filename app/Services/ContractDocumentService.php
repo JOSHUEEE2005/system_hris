@@ -919,6 +919,10 @@ PY;
             'name' => $recipient->name ?? '',
             'workemail' => $recipient->email,
             'email' => $recipient->email,
+            'startingdate' => $employee?->hire_date?->format('F j, Y')
+                ?? $intern?->internship_start_date?->format('F j, Y')
+                ?? '',
+            'period' => $employee?->period ?? $intern?->period ?? '',
             'department' => $recipient->department?->department_name
                 ?? $employee?->department?->department_name
                 ?? $intern?->department?->department_name
