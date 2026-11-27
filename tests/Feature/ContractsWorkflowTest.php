@@ -143,6 +143,55 @@ class ContractsWorkflowTest extends TestCase
         $this->assertSame(1, substr_count($contentTypes, 'Extension="png"'));
     }
 
+    public function test_pdf_header_items_sharing_a_vertical_band_do_not_add_flow_spacing(): void
+    {
+        $service = new ContractDocumentService();
+        $method = new \ReflectionMethod(ContractDocumentService::class, 'structuredPdfToHtml');
+        $method->setAccessible(true);
+        $html = $method->invoke($service, [[
+            'width' => 612,
+            'height' => 792,
+            'items' => [
+                [
+                    'y' => 28.7, 'x' => 58.2, 'width' => 333.6, 'height' => 75.5,
+                    'image' => 'aGVhZGVy',
+                ],
+                ['y' => 48.4, 'x' => 455.3, 'width' => 100, 'height' => 11.8, 'text' => 'ANNEX A'],
+                ['y' => 75.54, 'x' => 428.2, 'width' => 100, 'height' => 11.8, 'text' => 'WELCOME LETTER'],
+                ['y' => 158.6, 'x' => 79.2, 'width' => 130, 'height' => 13, 'text' => 'Recipient'],
+            ],
+        ]]);
+        $html = $service->sanitizeHtml($html);
+
+        $layoutPosition = strpos($html, 'converted-pdf-layout');
+        $welcomePosition = strpos($html, 'WELCOME LETTER');
+        $recipientPosition = strpos($html, 'Recipient');
+        $this->assertNotFalse($layoutPosition);
+        $this->assertNotFalse($welcomePosition);
+        $this->assertNotFalse($recipientPosition);
+        $this->assertLessThan($recipientPosition, $welcomePosition);
+        $this->assertStringContainsString('margin-top:54.40pt', $html);
+
+        $docx = $service->renderDocx($html);
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'contract-docx-layout-test-');
+        $this->assertNotFalse($temporaryPath);
+        try {
+            $this->assertNotFalse(file_put_contents($temporaryPath, $docx));
+            $archive = new \ZipArchive();
+            $this->assertTrue($archive->open($temporaryPath) === true);
+            $documentXml = $archive->getFromName('word/document.xml');
+            $archive->close();
+        } finally {
+            @unlink($temporaryPath);
+        }
+
+        $this->assertIsString($documentXml);
+        $this->assertStringContainsString('<w:tblBorders><w:top w:val="nil"/>', $documentXml);
+        $this->assertStringContainsString('<w:spacing w:after="0"/>', $documentXml);
+        $this->assertStringContainsString('WELCOME LETTER', $documentXml);
+        $this->assertStringContainsString('Recipient', $documentXml);
+    }
+
     public function test_hr_can_send_a_private_file_and_recipient_downloads_are_tracked_as_opened(): void
     {
         $department = Department::where('department_name', 'Chamber Services')->firstOrFail();

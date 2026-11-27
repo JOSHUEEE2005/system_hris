@@ -716,7 +716,10 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
 .contract-editor .converted-pdf-page { box-sizing: border-box; margin: 0 auto 20px; border: 1px solid #d1d5db; background: #fff; box-shadow: 0 2px 8px #173b5912; }
 .contract-editor .converted-pdf-header { display: block; width: 100%; height: auto; margin: 0 0 12px; }
 .contract-editor .converted-pdf-page-break { height: 0; page-break-before: always; }
-.contract-editor .converted-pdf-text { margin-top: 2px; margin-bottom: 4px; font-size: 10px; line-height: 1.25; white-space: normal; }
+.contract-editor .converted-pdf-text { margin: 0; font-size: 10px; line-height: 1.25; white-space: normal; }
+.contract-editor .converted-pdf-layout { width: 100%; margin: 0; border-collapse: collapse; table-layout: fixed; }
+.contract-editor .converted-pdf-layout td { min-width: 0; border: 0; padding: 0; vertical-align: top; }
+.contract-editor .converted-pdf-layout .converted-pdf-text { margin: 0; }
 .contract-editor .converted-pdf-table { table-layout: fixed; margin-top: 3px; margin-bottom: 5px; border-collapse: collapse; font-size: 9px; line-height: 1.2; }
 .contract-editor .converted-pdf-table th, .contract-editor .converted-pdf-table td { min-width: 0; border: 1px solid #111; padding: 2px 3px; vertical-align: middle; }
 .contract-editor .converted-pdf-table .converted-pdf-header-row th { background: #d3d3d3; color: #111; text-align: center; font-size: 8px; font-weight: 800; }

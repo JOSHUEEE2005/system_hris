@@ -38,6 +38,7 @@ class ContractDocumentService
         'converted-pdf-image',
         'converted-pdf-text',
         'converted-pdf-table',
+        'converted-pdf-layout',
         'converted-pdf-section-row',
         'converted-pdf-separator-row',
         'converted-pdf-header-row',
@@ -511,7 +512,28 @@ PY;
                 $html .= '<img class="converted-pdf-header" src="data:image/jpeg;base64,'.$page['header'].'" alt="Original PDF page header" style="width:'.$pageWidth.'pt">';
             }
             $previousBottom = 0.0;
-            foreach ($page['items'] as $item) {
+            $headerGroups = $this->overlappingPdfHeaderGroups($page['items'], $pageWidth, $pageHeight);
+            $groupedItems = [];
+            foreach ($page['items'] as $itemIndex => $item) {
+                if (isset($headerGroups[$itemIndex])) {
+                    $group = $headerGroups[$itemIndex];
+                    $itemY = max(0, (float) ($item['y'] ?? 0));
+                    $gap = max(0, $itemY - $previousBottom);
+                    if ($gap >= 1) {
+                        $html .= '<p class="converted-pdf-spacer" style="margin-top:'.number_format($gap, 2, '.', '').'pt"></p>';
+                    }
+                    $html .= $group['html'];
+                    $previousBottom = max($previousBottom, $group['bottom']);
+                    foreach ($group['indices'] as $groupedIndex) {
+                        $groupedItems[$groupedIndex] = true;
+                    }
+
+                    continue;
+                }
+                if (isset($groupedItems[$itemIndex])) {
+                    continue;
+                }
+
                 $itemY = max(0, (float) ($item['y'] ?? 0));
                 $gap = max(0, $itemY - $previousBottom);
                 if ($gap >= 1) {
@@ -544,6 +566,147 @@ PY;
             if ($pageIndex < count($pages) - 1) {
                 $html .= '<div class="converted-pdf-page-break"></div>';
             }
+        }
+
+        return $html;
+    }
+
+    private function overlappingPdfHeaderGroups(array $items, float $pageWidth, float $pageHeight): array
+    {
+        $groups = [];
+        foreach ($items as $imageIndex => $image) {
+            if (! isset($image['image'])) {
+                continue;
+            }
+
+            $imageY = max(0, (float) ($image['y'] ?? 0));
+            $imageX = max(0, (float) ($image['x'] ?? 0));
+            $imageWidth = max(0, (float) ($image['width'] ?? 0));
+            $imageHeight = max(0, (float) ($image['height'] ?? 0));
+            $imageRight = $imageX + $imageWidth;
+            $imageBottom = $imageY + $imageHeight;
+            if ($imageWidth <= 0 || $imageHeight <= 0 || $imageY > $pageHeight * 0.2
+                || $imageRight >= $pageWidth) {
+                continue;
+            }
+
+            $textIndices = [];
+            foreach ($items as $itemIndex => $item) {
+                if (! isset($item['text'])) {
+                    continue;
+                }
+
+                $itemY = max(0, (float) ($item['y'] ?? 0));
+                $itemX = max(0, (float) ($item['x'] ?? 0));
+                $itemHeight = max(0, (float) ($item['height'] ?? 0));
+                if ($itemY < $imageY || $itemY >= $imageBottom || $itemY + $itemHeight <= $imageY
+                    || $itemY > $pageHeight * 0.25 || $itemX < $imageRight) {
+                    continue;
+                }
+
+                $textIndices[] = $itemIndex;
+            }
+
+            if ($textIndices === []) {
+                continue;
+            }
+
+            sort($textIndices);
+            $textItems = array_map(static fn (int $index): array => $items[$index], $textIndices);
+            $groups[$imageIndex] = [
+                'html' => $this->renderOverlappingPdfHeader($image, $textItems, $imageX, $imageWidth, $pageWidth),
+                'indices' => $textIndices,
+                'bottom' => max($imageBottom, ...array_map(
+                    static fn (array $item): float => max(0, (float) $item['y']) + max(0, (float) ($item['height'] ?? 0)),
+                    $textItems,
+                )),
+            ];
+        }
+
+        return $groups;
+    }
+
+    private function renderOverlappingPdfHeader(
+        array $image,
+        array $textItems,
+        float $imageX,
+        float $imageWidth,
+        float $pageWidth,
+    ): string {
+        $imageRight = $imageX + $imageWidth;
+        $textGroups = [];
+        foreach ($textItems as $item) {
+            $itemX = max(0, (float) ($item['x'] ?? 0));
+            $groupIndex = null;
+            foreach ($textGroups as $index => $group) {
+                if (abs($group['x'] - $itemX) < 0.01) {
+                    $groupIndex = $index;
+                    break;
+                }
+            }
+            if ($groupIndex === null) {
+                $textGroups[] = ['x' => $itemX, 'items' => [$item]];
+            } else {
+                $textGroups[$groupIndex]['items'][] = $item;
+            }
+        }
+
+        $boundaries = array_merge(
+            [0, $imageX, $imageRight, $pageWidth],
+            array_column($textGroups, 'x'),
+        );
+        sort($boundaries, SORT_NUMERIC);
+        $boundaries = array_values(array_reduce($boundaries, static function (array $unique, float $boundary): array {
+            if ($unique === [] || abs(end($unique) - $boundary) >= 0.01) {
+                $unique[] = $boundary;
+            }
+
+            return $unique;
+        }, []));
+        $columnWidths = [];
+        for ($index = 0; $index < count($boundaries) - 1; $index++) {
+            $columnWidths[] = max(0, ($boundaries[$index + 1] - $boundaries[$index]) / $pageWidth * 100);
+        }
+        $html = '<table class="converted-pdf-layout" style="width:100%;margin-left:0%"><colgroup>';
+        foreach ($columnWidths as $columnWidth) {
+            $html .= '<col style="width:'.number_format($columnWidth, 6, '.', '').'%">';
+        }
+        $html .= '</colgroup><tbody><tr>';
+        foreach ($boundaries as $index => $boundary) {
+            if ($index >= count($boundaries) - 1) {
+                break;
+            }
+
+            $html .= '<td>';
+            if (abs($boundary - $imageX) < 0.01) {
+                $html .= '<p class="converted-pdf-text"><img class="converted-pdf-image" '
+                    .'src="data:image/jpeg;base64,'.$image['image'].'" alt="Image from original PDF" '
+                    .'style="width:'.number_format($imageWidth, 2, '.', '').'pt"></p>';
+            }
+            foreach ($textGroups as $group) {
+                if (abs($boundary - $group['x']) < 0.01) {
+                    $html .= $this->renderOverlappingPdfHeaderText($group['items'], max(0, (float) ($image['y'] ?? 0)));
+                }
+            }
+            $html .= '</td>';
+        }
+
+        return $html.'</tr></tbody></table>';
+    }
+
+    private function renderOverlappingPdfHeaderText(array $items, float $imageY): string
+    {
+        $html = '';
+        $previousBottom = $imageY;
+        foreach ($items as $item) {
+            $itemY = max(0, (float) ($item['y'] ?? 0));
+            $gap = max(0, $itemY - $previousBottom);
+            if ($gap >= 1) {
+                $html .= '<p class="converted-pdf-spacer" style="margin-top:'.number_format($gap, 2, '.', '').'pt"></p>';
+            }
+            $text = nl2br(htmlspecialchars((string) $item['text'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
+            $html .= '<p class="converted-pdf-text">'.$text.'</p>';
+            $previousBottom = max($previousBottom, $itemY + max(0, (float) ($item['height'] ?? 0)));
         }
 
         return $html;
@@ -943,6 +1106,9 @@ PY;
             .'.converted-pdf-header{display:block;width:100%;height:auto;margin:0}'
             .'.converted-pdf-spacer{height:0;line-height:0;margin:0;padding:0}'
             .'.converted-pdf-image{display:block;height:auto;max-width:100%}'
+            .'.converted-pdf-layout{width:100%;margin:0;border-collapse:collapse;table-layout:fixed}'
+            .'.converted-pdf-layout td{border:0;padding:0;vertical-align:top}'
+            .'.converted-pdf-layout .converted-pdf-text{margin:0}'
             .'.converted-pdf-table{table-layout:fixed;border-collapse:collapse;font-size:6pt;line-height:1.1;margin-top:0;margin-bottom:12pt}'
             .'.converted-pdf-table td,.converted-pdf-table th{border:1px solid #111;padding:1pt .5pt;line-height:1;vertical-align:middle}'
             .'.converted-pdf-table .converted-pdf-header-row th{background:#d3d3d3;color:#111;text-align:center;font-size:6pt}'
@@ -950,7 +1116,7 @@ PY;
             .'.converted-pdf-table .converted-pdf-checkbox-cell{font-family:DejaVu Sans,sans-serif;font-size:9pt;line-height:1;text-align:center}'
             .'.converted-pdf-table .converted-pdf-cell{background:#fff;color:#111}'
             .'.converted-pdf-table .converted-pdf-separator-row td{background:#1f3863;color:#1f3863}'
-            .'.converted-pdf-text{margin-top:2pt;margin-bottom:4pt;font-size:10pt;line-height:1.25;white-space:normal}'
+            .'.converted-pdf-text{margin:0;font-size:10pt;line-height:1.25;white-space:normal}'
             .'.converted-pdf-page-break{height:0;page-break-before:always}'
             .'</style></head><body>'.$html.'</body></html>';
     }
@@ -1408,8 +1574,11 @@ PY;
             $indent = $tag === 'blockquote'
                 ? '<w:ind w:left="720"/>'
                 : $this->wordParagraphIndent($node);
-            $properties = ($style !== '' || $alignment !== '' || $indent !== '')
-                ? '<w:pPr>'.$style.$alignment.$indent.'</w:pPr>'
+            $convertedPdfText = $tag === 'p'
+                && in_array('converted-pdf-text', preg_split('/\s+/', trim($node->getAttribute('class'))), true);
+            $spacing = $convertedPdfText ? '<w:spacing w:after="0"/>' : '';
+            $properties = ($style !== '' || $alignment !== '' || $indent !== '' || $spacing !== '')
+                ? '<w:pPr>'.$style.$alignment.$indent.$spacing.'</w:pPr>'
                 : '';
 
             return '<w:p>'.$properties.$this->renderWordInline($node).'</w:p>';
@@ -1420,6 +1589,11 @@ PY;
 
     private function renderWordTable(DOMElement $table): string
     {
+        $isConvertedPdfLayout = in_array(
+            'converted-pdf-layout',
+            preg_split('/\s+/', trim($table->getAttribute('class'))),
+            true,
+        );
         $rows = [];
         foreach ($table->childNodes as $section) {
             if (! $section instanceof DOMElement) {
@@ -1495,16 +1669,21 @@ PY;
             $wordRows .= $this->renderWordRow($row, $rowIndex, $columnCount, $occupied, $resolvedColumnWidths);
         }
 
+        $tableBorders = $isConvertedPdfLayout
+            ? '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/>'
+                .'<w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>'
+                .'<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>'
+                .'<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>'
+            : '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="B7C8D5"/>'
+                .'<w:left w:val="single" w:sz="4" w:color="B7C8D5"/>'
+                .'<w:bottom w:val="single" w:sz="4" w:color="B7C8D5"/>'
+                .'<w:right w:val="single" w:sz="4" w:color="B7C8D5"/>'
+                .'<w:insideH w:val="single" w:sz="4" w:color="B7C8D5"/>'
+                .'<w:insideV w:val="single" w:sz="4" w:color="B7C8D5"/></w:tblBorders>';
+
         return '<w:tbl><w:tblPr><w:tblW w:w="'.$tableWidth.'" w:type="dxa"/>'
             .($tableIndent > 0 ? '<w:tblInd w:w="'.$tableIndent.'" w:type="dxa"/>' : '')
-            .'<w:tblLayout w:type="fixed"/><w:tblBorders>'
-            .'<w:top w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'<w:left w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'<w:bottom w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'<w:right w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'<w:insideH w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'<w:insideV w:val="single" w:sz="4" w:color="B7C8D5"/>'
-            .'</w:tblBorders></w:tblPr><w:tblGrid>'.$gridColumns.'</w:tblGrid>'.$wordRows.'</w:tbl>';
+            .'<w:tblLayout w:type="fixed"/>'.$tableBorders.'</w:tblPr><w:tblGrid>'.$gridColumns.'</w:tblGrid>'.$wordRows.'</w:tbl>';
     }
 
     private function renderWordRow(DOMElement $row, int $rowIndex, int $columnCount, array &$occupied, array $columnWidths): string
