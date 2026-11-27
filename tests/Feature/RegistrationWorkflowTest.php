@@ -314,7 +314,10 @@ class RegistrationWorkflowTest extends TestCase
         $this->actingAs($admin)->get(route('admin.users'))
             ->assertOk()
             ->assertSee('id="open-user-modal"', false)
-            ->assertSee('data-edit-user', false);
+            ->assertSee('data-edit-user', false)
+            ->assertSee('data-user-delete', false)
+            ->assertSee('Are you sure you want to delete', false)
+            ->assertSee(route('admin.users.destroy', $directoryUser), false);
     }
 
     public function test_intern_creation_requires_an_internship_status_and_does_not_leave_partial_records(): void

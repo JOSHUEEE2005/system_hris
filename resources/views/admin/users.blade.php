@@ -121,13 +121,22 @@
                                         <td>{{ $record->intern?->intern_no ?? $record->employee?->employee_no ?? '—' }}</td>
                                         <td><span class="sa-badge {{ strtolower($record->status) }}">{{ $record->status }}</span></td>
                                         <td>
-                                            @if ($canManageUsers && $canManageEmployees && ($record->employee || $record->intern))
-                                                <button class="sa-user-edit" type="button" data-edit-user
-                                                    data-edit-user-id="{{ $record->id }}"
-                                                    data-update-url="{{ route('admin.users.profile.update', $record) }}"
-                                                    data-user="{{ json_encode($editProfileData, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP) }}">
-                                                    Edit
-                                                </button>
+                                            @if ($canManageUsers)
+                                                <div class="sa-user-actions">
+                                                    @if ($canManageEmployees && ($record->employee || $record->intern))
+                                                        <button class="sa-user-edit" type="button" data-edit-user
+                                                            data-edit-user-id="{{ $record->id }}"
+                                                            data-update-url="{{ route('admin.users.profile.update', $record) }}"
+                                                            data-user="{{ json_encode($editProfileData, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP) }}">
+                                                            Edit
+                                                        </button>
+                                                    @endif
+                                                    <form method="POST" action="{{ route('admin.users.destroy', $record) }}" data-user-delete data-user-name="{{ $record->name }}">
+                                                        @csrf
+                                                        @method('DELETE')
+                                                        <button class="sa-user-delete" type="submit">Delete</button>
+                                                    </form>
+                                                </div>
                                             @endif
                                         </td>
                                     </tr>
@@ -245,7 +254,7 @@
     @endif
     <style>
         .sa-modal{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:20px}.sa-modal[hidden]{display:none}.sa-modal-backdrop{position:absolute;inset:0;background:rgba(8,31,50,.64);backdrop-filter:blur(3px)}.sa-modal-panel{position:relative;width:min(1080px,100%);max-height:calc(100vh - 40px);overflow:auto;border:1px solid #dce6ee;border-radius:16px;background:#fff;box-shadow:0 28px 80px rgba(8,31,50,.3)}.sa-modal-header{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;gap:18px;padding:22px 28px;background:linear-gradient(120deg,#0d5b88,#1676a8);color:#fff}.sa-modal-eyebrow{display:block;margin-bottom:5px;color:#c5e8fa;font-size:10px;font-weight:800;letter-spacing:.14em}.sa-modal-header h2{margin:0;color:#fff;font-size:22px;font-weight:800;letter-spacing:-.02em}.sa-modal-header p{margin:5px 0 0;color:#e0f2fc;font-size:13px}.sa-modal-close{display:grid;width:36px;height:36px;flex:none;place-items:center;border:1px solid #ffffff55;border-radius:9px;background:#ffffff12;color:#fff;font-size:25px;line-height:1;cursor:pointer}.sa-modal-close:hover{background:#ffffff28}.sa-modal-form{padding:22px 28px 26px}.sa-profile-type{display:flex;gap:10px;margin:0 0 22px;padding:0;border:0}.sa-profile-type legend{padding:0 0 8px;color:#294c65;font-size:12px;font-weight:700}.sa-profile-type label{display:flex;min-width:120px;align-items:center;gap:8px;border:1px solid #ccd8e1;border-radius:8px;padding:10px 12px;color:#294c65;font-size:12px;font-weight:700;cursor:pointer}.sa-profile-type label:has(input:checked){border-color:#1681b4;background:#e8f4fa;color:#0d5b88}.sa-modal-section{margin-top:24px;padding-top:22px;border-top:1px solid #e8eef3}.sa-modal-section-heading{display:flex;align-items:center;gap:11px;margin-bottom:16px}.sa-modal-section-heading>span{display:grid;width:30px;height:30px;flex:none;place-items:center;border-radius:9px;background:#e8f4fa;color:#0d5b88;font-size:11px;font-weight:800}.sa-modal-section-heading h3{margin:0;color:#173c56;font-size:14px;font-weight:800}.sa-modal-section-heading p{margin:2px 0 0;color:#71869a;font-size:11px}.sa-modal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px}.sa-field{display:flex;min-width:0;flex-direction:column;gap:6px}.sa-field-wide{grid-column:1/-1}.sa-field label{color:#294c65;font-size:12px;font-weight:700}.sa-field label span{color:#d25555}.sa-field small{color:#8294a3;font-size:10px;font-weight:400}.sa-field input,.sa-field select,.sa-derived-field output{width:100%;min-height:40px;border:1px solid #ccd8e1;border-radius:8px;background:#fff;padding:9px 11px;color:#173c56;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}.sa-derived-field output{background:#f4f8fa;color:#49687d}.sa-field input:focus,.sa-field select:focus{border-color:#1681b4;box-shadow:0 0 0 3px #1681b41c}.sa-account-section{border-top:1px solid #e8eef3}.sa-modal-error{margin-bottom:20px;border:1px solid #fecaca;border-radius:9px;background:#fef2f2;padding:12px 14px;color:#991b1b;font-size:12px}.sa-modal-error ul{margin:5px 0 0;padding-left:18px}.sa-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px;padding-top:18px;border-top:1px solid #e8eef3}.sa-modal-secondary,.sa-primary{min-height:40px;border-radius:8px;padding:9px 17px;font-size:12px;font-weight:800;cursor:pointer}.sa-modal-secondary{border:1px solid #cbd7e0;background:#fff;color:#35566e}.sa-modal-secondary:hover{background:#f5f8fa}.sa-primary{border:1px solid #0d5b88;background:#0d5b88;color:#fff;box-shadow:0 2px 5px #0d5b8830}.sa-primary:hover{background:#094a70}.sa-primary:disabled{opacity:.65;cursor:wait}@media(max-width:600px){.sa-modal{padding:10px}.sa-modal-panel{max-height:calc(100vh - 20px);border-radius:12px}.sa-modal-header{padding:18px}.sa-modal-form{padding:18px}.sa-modal-grid{grid-template-columns:1fr}.sa-field-wide{grid-column:auto}.sa-modal-actions{position:sticky;bottom:-18px;margin:20px -18px -18px;padding:14px 18px;background:#fff}}
-        .sa-user-edit{border:1px solid #c6d9e6;border-radius:7px;background:#fff;padding:6px 11px;color:#0d5b88;font-size:11px;font-weight:800;cursor:pointer}.sa-user-edit:hover{border-color:#0d5b88;background:#eaf5fb}.sa-edit-only[hidden]{display:none}.sa-profile-type input:disabled+span{cursor:default}
+        .sa-user-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sa-user-actions form{margin:0}.sa-user-edit,.sa-user-delete{border:1px solid #c6d9e6;border-radius:7px;background:#fff;padding:6px 11px;color:#0d5b88;font-size:11px;font-weight:800;cursor:pointer}.sa-user-edit:hover{border-color:#0d5b88;background:#eaf5fb}.sa-user-delete{border-color:#f0c4c4;color:#b42318}.sa-user-delete:hover{border-color:#b42318;background:#fff1f0}.sa-edit-only[hidden]{display:none}.sa-profile-type input:disabled+span{cursor:default}
     </style>
     <script>
         (() => {
@@ -255,6 +264,16 @@
             const status = document.getElementById('directory-status');
             const empty = document.getElementById('directory-empty');
             const groups = [...document.querySelectorAll('[data-directory-group]')];
+            const userDeleteForms = [...document.querySelectorAll('[data-user-delete]')];
+
+            userDeleteForms.forEach((form) => {
+                form.addEventListener('submit', (event) => {
+                    const name = form.dataset.userName || 'this user';
+                    if (!window.confirm(`Are you sure you want to delete ${name}?`)) {
+                        event.preventDefault();
+                    }
+                });
+            });
 
             const filterDirectory = () => {
                 const query = search.value.trim().toLowerCase();
