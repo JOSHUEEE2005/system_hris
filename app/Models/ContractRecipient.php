@@ -12,11 +12,21 @@ class ContractRecipient extends Model
         'status',
         'received_at',
         'opened_at',
+        'returned_storage_path',
+        'returned_filename',
+        'returned_mime_type',
+        'returned_file_size',
+        'review_feedback',
+        'submitted_at',
+        'reviewed_at',
     ];
 
     protected $casts = [
         'received_at' => 'datetime',
         'opened_at' => 'datetime',
+        'returned_file_size' => 'integer',
+        'submitted_at' => 'datetime',
+        'reviewed_at' => 'datetime',
     ];
 
     public function contract(): BelongsTo

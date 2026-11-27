@@ -29,6 +29,148 @@ class ContractsWorkflowTest extends TestCase
         Storage::fake('local');
     }
 
+    public function test_send_to_all_targets_only_active_employee_and_intern_profiles(): void
+    {
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $superAdminProfile = Employee::create([
+            'employee_no' => 'EMP-ALL-004',
+            'first_name' => 'HR',
+            'last_name' => 'Manager',
+            'email' => $hr->email,
+        ]);
+        $hr->update(['employee_id' => $superAdminProfile->id]);
+        $employee = $this->createUser('Jordan Employee', 'jordan@example.com', 'employee');
+        $employeeProfile = Employee::create([
+            'employee_no' => 'EMP-ALL-001',
+            'first_name' => 'Jordan',
+            'last_name' => 'Employee',
+            'email' => $employee->email,
+        ]);
+        $employee->update(['employee_id' => $employeeProfile->id]);
+
+        $intern = $this->createUser('Taylor Intern', 'taylor@example.com', 'employee');
+        Intern::create([
+            'intern_no' => 'INT-ALL-001',
+            'intern_name' => 'Taylor Intern',
+            'email' => $intern->email,
+            'internship_status' => 'Active',
+            'user_id' => $intern->id,
+        ]);
+
+        $hrWithEmployeeProfile = $this->createUser('HR With Profile', 'hr-profile@example.com', 'hr-manager');
+        $hrProfile = Employee::create([
+            'employee_no' => 'EMP-ALL-002',
+            'first_name' => 'HR',
+            'last_name' => 'Profile',
+            'email' => $hrWithEmployeeProfile->email,
+        ]);
+        $hrWithEmployeeProfile->update(['employee_id' => $hrProfile->id]);
+
+        $inactive = $this->createUser('Inactive Employee', 'inactive@example.com', 'employee');
+        $inactiveProfile = Employee::create([
+            'employee_no' => 'EMP-ALL-003',
+            'first_name' => 'Inactive',
+            'last_name' => 'Employee',
+            'email' => $inactive->email,
+        ]);
+        $inactive->update(['employee_id' => $inactiveProfile->id, 'status' => 'Inactive']);
+
+        $this->actingAs($hr)->post(route('admin.contracts.store'), [
+            'title' => 'Return for review',
+            'file' => UploadedFile::fake()->create('agreement.pdf', 12, 'application/pdf'),
+            'recipient_type' => 'all',
+            'response_mode' => 'requires_return',
+        ])->assertRedirect()
+            ->assertSessionHas('status', 'Contract uploaded and sent to 2 recipients.');
+
+        $contract = Contract::with('recipients')->firstOrFail();
+        $this->assertSame('requires_return', $contract->response_mode);
+        $this->assertEqualsCanonicalizing(
+            [$employee->id, $intern->id],
+            $contract->recipients->pluck('user_id')->all(),
+        );
+        $this->assertDatabaseMissing('contract_recipients', [
+            'contract_id' => $contract->id,
+            'user_id' => $hrWithEmployeeProfile->id,
+        ]);
+        $this->assertDatabaseMissing('contract_recipients', [
+            'contract_id' => $contract->id,
+            'user_id' => $inactive->id,
+        ]);
+    }
+
+    public function test_returned_contract_can_be_revised_and_approved_for_one_recipient_only(): void
+    {
+        $department = Department::where('department_name', 'Chamber Services')->firstOrFail();
+        $hr = $this->createUser('HR Manager', 'hr@example.com', 'super-admin');
+        $recipient = $this->createUser('Jamie Rivera', 'jamie@example.com', 'employee', $department->id);
+        $otherRecipient = $this->createUser('Taylor Park', 'taylor@example.com', 'employee', $department->id);
+
+        $this->actingAs($hr)->post(route('admin.contracts.store'), [
+            'title' => 'Employment agreement',
+            'file' => UploadedFile::fake()->create('original.pdf', 12, 'application/pdf'),
+            'recipient_type' => 'individual',
+            'recipient_ids' => [$recipient->id, $otherRecipient->id],
+            'response_mode' => 'requires_return',
+        ])->assertRedirect();
+        $contract = Contract::with('recipients')->firstOrFail();
+        $recipientRecord = $contract->recipients->firstWhere('user_id', $recipient->id);
+        $this->actingAs($recipient)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Action needed')
+            ->assertSee('Send to HR for review');
+
+        $this->actingAs($recipient)->post(route('admin.contracts.response.submit', $contract), [
+            'file' => UploadedFile::fake()->create('first-draft.pdf', 8, 'application/pdf'),
+        ])->assertRedirect();
+        $firstDraftPath = $recipientRecord->fresh()->returned_storage_path;
+        Storage::disk('local')->assertExists($firstDraftPath);
+        $this->assertSame('Submitted', $recipientRecord->fresh()->status);
+        $this->actingAs($hr)->get(route('admin.contracts.response.download', [$contract, $recipientRecord]))
+            ->assertDownload('first-draft.pdf');
+        $this->actingAs($otherRecipient)->get(route('admin.contracts.response.download', [$contract, $recipientRecord]))
+            ->assertForbidden();
+        $this->actingAs($recipient)->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
+            ->assertOk();
+        $this->assertSame('Submitted', $recipientRecord->fresh()->status);
+        $this->actingAs($hr)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('View submitted file')
+            ->assertSee('Approve')
+            ->assertSee('Request revision');
+
+        $this->actingAs($hr)->post(route('admin.contracts.response.changes', [$contract, $recipientRecord]), [
+            'feedback' => 'Please correct the start date.',
+        ])->assertRedirect();
+        $this->assertSame('Changes Requested', $recipientRecord->fresh()->status);
+        $this->assertSame('Please correct the start date.', $recipientRecord->fresh()->review_feedback);
+        $this->actingAs($recipient)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Please correct the start date.')
+            ->assertSee('Send updated file to HR');
+
+        $this->actingAs($recipient)->post(route('admin.contracts.response.submit', $contract), [
+            'file' => UploadedFile::fake()->create('revised-final.pdf', 9, 'application/pdf'),
+        ])->assertRedirect();
+        $revisedPath = $recipientRecord->fresh()->returned_storage_path;
+        $this->assertNotSame($firstDraftPath, $revisedPath);
+        Storage::disk('local')->assertMissing($firstDraftPath);
+        Storage::disk('local')->assertExists($revisedPath);
+        $this->assertNull($recipientRecord->fresh()->review_feedback);
+
+        $this->actingAs($hr)->post(route('admin.contracts.response.approve', [$contract, $recipientRecord]))
+            ->assertRedirect();
+        $this->assertSame('Approved', $recipientRecord->fresh()->status);
+        $this->actingAs($recipient)->get(route('admin.contracts'))
+            ->assertOk()
+            ->assertSee('Approved')
+            ->assertSee('Your submitted version is approved');
+        $this->actingAs($recipient)->get(route('admin.contracts.download', $contract))
+            ->assertDownload('revised-final.pdf');
+        $this->actingAs($otherRecipient)->get(route('admin.contracts.download', $contract))
+            ->assertDownload('original.pdf');
+    }
+
     public function test_pdf_conversion_sanitizer_preserves_large_table_spans(): void
     {
         $html = app(ContractDocumentService::class)->sanitizeHtml(
@@ -260,7 +402,8 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('Search employees by name, email, or department')
             ->assertSee('Jamie Rivera')
             ->assertSee('data-personal-folder-filter="'.$recipient->id.'"', false)
-            ->assertSee('0 of 1 opened')
+            ->assertSee('0 opened')
+            ->assertSee('1 not opened')
             ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
             ->assertSee('Edit')
             ->assertSee('value="'.$recipient->id.'"', false)
@@ -287,7 +430,8 @@ class ContractsWorkflowTest extends TestCase
         $this->assertInstanceOf(\DateTimeInterface::class, $openedAt);
         $this->actingAs($hr)->get(route('admin.contracts'))
             ->assertOk()
-            ->assertSee('1 of 1 opened')
+            ->assertSee('1 opened')
+            ->assertSee('0 not opened')
             ->assertSee('data-recipient-status-user="'.$recipient->id.'"', false)
             ->assertSee('Opened');
         $this->actingAs($otherUser)->get(route('admin.contracts.download', $contract))->assertForbidden();
@@ -779,7 +923,7 @@ class ContractsWorkflowTest extends TestCase
             ->assertDownload('employment-agreement.docx');
         $this->actingAs($recipient)
             ->get(route('admin.contracts.preview', $contract))
-            ->assertHeader('content-type', 'application/pdf');
+            ->assertHeader('content-type', 'text/html; charset=UTF-8');
         $this->actingAs($recipient)
             ->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
             ->assertOk();

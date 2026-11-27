@@ -111,7 +111,8 @@ class ContractController extends Controller
             'title' => ['required', 'string', 'max:200'],
             'file' => [$sourceType === 'upload' ? 'required' : 'nullable', 'file', 'max:35840'],
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
-            'recipient_type' => ['required', Rule::in(['department', 'individual'])],
+            'recipient_type' => ['required', Rule::in(['department', 'individual', 'all'])],
+            'response_mode' => ['sometimes', Rule::in(['as_is', 'requires_return'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
             'folder_id' => ['nullable', 'integer', Rule::exists('contract_folders', 'id')->whereNull('user_id')],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
@@ -121,6 +122,7 @@ class ContractController extends Controller
                 Rule::exists('users', 'id')->where('status', 'Active'),
             ],
         ]);
+        $data['response_mode'] = $data['response_mode'] ?? 'as_is';
         $recipientIds = $this->resolveRecipientIds($data);
 
         $contentHtml = $sourceType === 'editor' ? $documents->sanitizeHtml($data['content_html']) : null;
@@ -161,6 +163,7 @@ class ContractController extends Controller
                     'file_size' => $fileSize,
                     'recipient_type' => $data['recipient_type'],
                     'department_id' => $data['recipient_type'] === 'department' ? $data['department_id'] : null,
+                    'response_mode' => $data['response_mode'],
                     'folder_id' => $data['folder_id'] ?? null,
                     'created_by' => $request->user()->id,
                     'sent_at' => now(),
@@ -175,6 +178,7 @@ class ContractController extends Controller
                     'title' => $contract->title,
                     'filename' => $contract->original_filename,
                     'recipient_type' => $contract->recipient_type,
+                    'response_mode' => $contract->response_mode,
                     'department_id' => $contract->department_id,
                     'recipient_ids' => $recipientIds,
                 ]);
@@ -232,12 +236,17 @@ class ContractController extends Controller
             }
         }
 
+        $supersededResponsePaths = [];
         try {
-            DB::transaction(function () use ($request, $contract, $contentHtml, $storagePath, $originalPdfPath, $isReconversion): void {
+            DB::transaction(function () use ($request, $contract, $contentHtml, $storagePath, $originalPdfPath, $isReconversion, &$supersededResponsePaths): void {
                 $lockedContract = Contract::with('recipients')
                     ->whereKey($contract->id)
                     ->lockForUpdate()
                     ->firstOrFail();
+                $supersededResponsePaths = $lockedContract->recipients
+                    ->pluck('returned_storage_path')
+                    ->filter()
+                    ->all();
 
                 $lockedContract->update([
                     'original_filename' => $this->templateFilename($lockedContract->title, 'html'),
@@ -252,6 +261,13 @@ class ContractController extends Controller
                     'status' => 'Pending',
                     'received_at' => null,
                     'opened_at' => null,
+                    'returned_storage_path' => null,
+                    'returned_filename' => null,
+                    'returned_mime_type' => null,
+                    'returned_file_size' => null,
+                    'review_feedback' => null,
+                    'submitted_at' => null,
+                    'reviewed_at' => null,
                 ]);
 
                 $this->audit($request, 'contract.converted', $lockedContract->id, [
@@ -272,6 +288,15 @@ class ContractController extends Controller
             }
 
             throw $exception;
+        }
+
+        foreach (array_unique($supersededResponsePaths) as $path) {
+            if (! Storage::disk('local')->delete($path)) {
+                Log::warning('Unable to remove a recipient response after rebuilding a contract.', [
+                    'storage_path' => $path,
+                    'contract_id' => $contract->id,
+                ]);
+            }
         }
 
         if (! Storage::disk('local')->delete($oldStoragePath)) {
@@ -302,7 +327,8 @@ class ContractController extends Controller
             'title' => ['required', 'string', 'max:200'],
             'file' => [$requiresUpload ? 'required' : 'nullable', 'file', 'max:35840'],
             'content_html' => [$sourceType === 'editor' ? 'required' : 'nullable', 'string', 'max:100000'],
-            'recipient_type' => ['required', Rule::in(['department', 'individual'])],
+            'recipient_type' => ['required', Rule::in(['department', 'individual', 'all'])],
+            'response_mode' => ['sometimes', Rule::in(['as_is', 'requires_return'])],
             'department_id' => ['nullable', 'required_if:recipient_type,department', 'integer', 'exists:departments,id'],
             'folder_id' => ['nullable', 'integer', Rule::exists('contract_folders', 'id')->whereNull('user_id')],
             'recipient_ids' => ['required_if:recipient_type,individual', 'array', 'min:1'],
@@ -312,6 +338,7 @@ class ContractController extends Controller
                 Rule::exists('users', 'id')->where('status', 'Active'),
             ],
         ]);
+        $data['response_mode'] = $data['response_mode'] ?? $contract->response_mode ?? 'as_is';
         $recipientIds = $this->resolveRecipientIds($data);
         if ($data['recipient_type'] === 'individual') {
             $candidateIds = $this->recipientCandidateQuery()->pluck('id')->all();
@@ -350,8 +377,10 @@ class ContractController extends Controller
         $fileSize = $sourceType === 'editor'
             ? strlen($contentHtml)
             : ($file?->getSize() ?? $contract->file_size);
+        $workflowChanged = $documentChanged || $data['response_mode'] !== $contract->response_mode;
 
         $oldStoragePath = null;
+        $supersededResponsePaths = [];
         try {
             DB::transaction(function () use (
                 $data,
@@ -365,6 +394,8 @@ class ContractController extends Controller
                 $request,
                 $contract,
                 &$oldStoragePath,
+                &$supersededResponsePaths,
+                $workflowChanged,
             ): void {
                 $lockedContract = Contract::with('recipients')
                     ->whereKey($contract->id)
@@ -390,17 +421,33 @@ class ContractController extends Controller
                     'department_id' => $departmentId,
                     'folder_id' => $data['folder_id'] ?? null,
                     'content_html' => $contentHtml,
+                    'response_mode' => $data['response_mode'],
                 ]);
 
+                $removedRecipients = $lockedContract->recipients()->whereNotIn('user_id', $recipientIds)->get();
+                $supersededResponsePaths = array_merge(
+                    $supersededResponsePaths,
+                    $removedRecipients->pluck('returned_storage_path')->filter()->all(),
+                );
                 $lockedContract->recipients()->whereNotIn('user_id', $recipientIds)->delete();
                 foreach ($recipientIds as $userId) {
                     $existingRecipient = $oldRecipientsById->get($userId);
                     if ($existingRecipient) {
-                        if ($documentChanged) {
+                        if ($workflowChanged) {
+                            if ($existingRecipient->returned_storage_path) {
+                                $supersededResponsePaths[] = $existingRecipient->returned_storage_path;
+                            }
                             $existingRecipient->update([
                                 'status' => 'Pending',
                                 'received_at' => null,
                                 'opened_at' => null,
+                                'returned_storage_path' => null,
+                                'returned_filename' => null,
+                                'returned_mime_type' => null,
+                                'returned_file_size' => null,
+                                'review_feedback' => null,
+                                'submitted_at' => null,
+                                'reviewed_at' => null,
                             ]);
                         }
 
@@ -438,6 +485,10 @@ class ContractController extends Controller
                         'current' => $recipientIds,
                     ],
                     'opened_status_reset' => $documentChanged,
+                    'response_mode' => [
+                        'from' => $contract->response_mode,
+                        'to' => $data['response_mode'],
+                    ],
                 ]);
             });
         } catch (Throwable $exception) {
@@ -448,6 +499,15 @@ class ContractController extends Controller
             }
 
             throw $exception;
+        }
+
+        foreach (array_unique($supersededResponsePaths) as $path) {
+            if (! Storage::disk('local')->delete($path)) {
+                Log::warning('Unable to remove a superseded recipient contract response.', [
+                    'storage_path' => $path,
+                    'contract_id' => $contract->id,
+                ]);
+            }
         }
 
         if ($documentChanged && $oldStoragePath && ! Storage::disk('local')->delete($oldStoragePath)) {
@@ -464,12 +524,16 @@ class ContractController extends Controller
 
     public function destroy(Request $request, Contract $contract): RedirectResponse
     {
-        $storagePath = $contract->storage_path;
-        DB::transaction(function () use ($request, $contract): void {
+        $storagePaths = [];
+        DB::transaction(function () use ($request, $contract, &$storagePaths): void {
             $lockedContract = Contract::with('recipients')
                 ->whereKey($contract->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+            $storagePaths = array_merge(
+                [$lockedContract->storage_path, $lockedContract->original_pdf_path],
+                $lockedContract->recipients->pluck('returned_storage_path')->all(),
+            );
             $this->audit($request, 'contract.deleted', $lockedContract->id, [
                 'title' => $lockedContract->title,
                 'filename' => $lockedContract->original_filename,
@@ -483,13 +547,18 @@ class ContractController extends Controller
             $lockedContract->delete();
         });
 
-        if (! Storage::disk('local')->delete($storagePath)) {
-            Log::error('The contract record was deleted but its private file could not be removed.', [
-                'storage_path' => $storagePath,
-                'contract_id' => $contract->id,
-            ]);
-
-            return back()->with('warning', 'The contract was deleted, but its stored file could not be removed. Contact an administrator.');
+        $cleanupFailed = false;
+        foreach (array_unique(array_filter($storagePaths)) as $path) {
+            if (! Storage::disk('local')->delete($path)) {
+                $cleanupFailed = true;
+                Log::error('A contract record was deleted but an associated private file could not be removed.', [
+                    'storage_path' => $path,
+                    'contract_id' => $contract->id,
+                ]);
+            }
+        }
+        if ($cleanupFailed) {
+            return back()->with('warning', 'The contract was deleted, but one or more stored files could not be removed. Contact an administrator.');
         }
 
         return back()->with('status', 'Contract deleted successfully.');
@@ -498,6 +567,23 @@ class ContractController extends Controller
     public function preview(Request $request, Contract $contract, ContractDocumentService $documents): BinaryFileResponse|Response
     {
         $this->authorizeAccess($request, $contract);
+        $approvedResponse = $this->approvedResponseForViewer($request, $contract);
+        if ($approvedResponse) {
+            abort_unless(in_array($approvedResponse->returned_mime_type, self::PREVIEWABLE_MIME_TYPES, true), 415);
+            $path = Storage::disk('local')->path($approvedResponse->returned_storage_path);
+            abort_unless(is_file($path), 404);
+
+            $response = response()->file($path, [
+                'Content-Type' => $approvedResponse->returned_mime_type,
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+            if ($request->boolean('track_open')) {
+                $this->markOpenedIfRecipient($request, $contract, 'preview');
+            }
+
+            return $response;
+        }
+
         if ($request->boolean('original') && $contract->original_pdf_path) {
             $originalPdfPath = Storage::disk('local')->path($contract->original_pdf_path);
             if (is_file($originalPdfPath)) {
@@ -549,6 +635,20 @@ class ContractController extends Controller
     public function download(Request $request, Contract $contract, ContractDocumentService $documents): StreamedResponse
     {
         $this->authorizeAccess($request, $contract);
+        $approvedResponse = $this->approvedResponseForViewer($request, $contract);
+        if ($approvedResponse) {
+            abort_unless(Storage::disk('local')->exists($approvedResponse->returned_storage_path), 404);
+
+            $response = Storage::disk('local')->download(
+                $approvedResponse->returned_storage_path,
+                $approvedResponse->returned_filename,
+                ['X-Content-Type-Options' => 'nosniff'],
+            );
+            $this->markOpenedIfRecipient($request, $contract, 'download');
+
+            return $response;
+        }
+
         if ($contract->original_pdf_path && $request->boolean('original')) {
             abort_unless(Storage::disk('local')->exists($contract->original_pdf_path), 404);
             $response = Storage::disk('local')->download(
@@ -598,6 +698,154 @@ class ContractController extends Controller
         return $response;
     }
 
+    public function submitResponse(Request $request, Contract $contract): RedirectResponse
+    {
+        abort_unless($contract->response_mode === 'requires_return', 404);
+        $data = $request->validate([
+            'file' => ['required', 'file', 'max:35840'],
+        ]);
+        $recipient = $contract->recipients()
+            ->where('user_id', $request->user()->id)
+            ->firstOrFail();
+        abort_if($recipient->status === 'Approved', 409, 'This contract has already been approved.');
+
+        $file = $data['file'];
+        $storagePath = $file->store('contract-responses', 'local');
+        if ($storagePath === false) {
+            return back()->withErrors(['file' => 'Your completed contract could not be stored.'])->withInput();
+        }
+
+        $previousStoragePath = null;
+        try {
+            DB::transaction(function () use ($request, $contract, $recipient, $file, $storagePath, &$previousStoragePath): void {
+                $lockedRecipient = ContractRecipient::whereKey($recipient->id)
+                    ->where('contract_id', $contract->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+                abort_if($lockedRecipient->status === 'Approved', 409, 'This contract has already been approved.');
+                $previousStoragePath = $lockedRecipient->returned_storage_path;
+                $submittedAt = now();
+                $lockedRecipient->update([
+                    'status' => 'Submitted',
+                    'returned_storage_path' => $storagePath,
+                    'returned_filename' => $file->getClientOriginalName(),
+                    'returned_mime_type' => $file->getMimeType() ?: 'application/octet-stream',
+                    'returned_file_size' => $file->getSize(),
+                    'review_feedback' => null,
+                    'submitted_at' => $submittedAt,
+                    'reviewed_at' => null,
+                ]);
+                $this->audit($request, 'contract.response_submitted', $contract->id, [
+                    'recipient_user_id' => $lockedRecipient->user_id,
+                    'filename' => $lockedRecipient->returned_filename,
+                    'submitted_at' => $submittedAt->toISOString(),
+                ]);
+            });
+        } catch (Throwable $exception) {
+            if (! Storage::disk('local')->delete($storagePath)) {
+                Log::warning('Unable to remove a contract response after its database update failed.', [
+                    'storage_path' => $storagePath,
+                    'contract_id' => $contract->id,
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        if ($previousStoragePath && ! Storage::disk('local')->delete($previousStoragePath)) {
+            Log::warning('Unable to remove the superseded contract response.', [
+                'storage_path' => $previousStoragePath,
+                'contract_id' => $contract->id,
+                'recipient_id' => $recipient->id,
+            ]);
+        }
+
+        return back()->with('status', 'Your completed contract was sent to HR for review.');
+    }
+
+    public function downloadResponse(Request $request, Contract $contract, ContractRecipient $recipient): StreamedResponse
+    {
+        $this->authorizeReview($request, $contract, $recipient);
+        abort_unless($recipient->returned_storage_path, 404);
+        abort_unless(Storage::disk('local')->exists($recipient->returned_storage_path), 404);
+
+        return Storage::disk('local')->download(
+            $recipient->returned_storage_path,
+            $recipient->returned_filename,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function downloadOwnResponse(Request $request, Contract $contract): StreamedResponse
+    {
+        $recipient = $contract->recipients()
+            ->where('user_id', $request->user()->id)
+            ->firstOrFail();
+        abort_unless($contract->response_mode === 'requires_return' && $recipient->returned_storage_path, 404);
+        abort_unless(Storage::disk('local')->exists($recipient->returned_storage_path), 404);
+
+        return Storage::disk('local')->download(
+            $recipient->returned_storage_path,
+            $recipient->returned_filename,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function approveResponse(Request $request, Contract $contract, ContractRecipient $recipient): RedirectResponse
+    {
+        $this->authorizeReview($request, $contract, $recipient);
+        DB::transaction(function () use ($request, $contract, $recipient): void {
+            $lockedRecipient = ContractRecipient::whereKey($recipient->id)
+                ->where('contract_id', $contract->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($lockedRecipient->status === 'Submitted' && $lockedRecipient->returned_storage_path, 409);
+            abort_unless(Storage::disk('local')->exists($lockedRecipient->returned_storage_path), 404);
+
+            $reviewedAt = now();
+            $lockedRecipient->update([
+                'status' => 'Approved',
+                'review_feedback' => null,
+                'reviewed_at' => $reviewedAt,
+            ]);
+            $this->audit($request, 'contract.response_approved', $contract->id, [
+                'recipient_user_id' => $lockedRecipient->user_id,
+                'filename' => $lockedRecipient->returned_filename,
+                'reviewed_at' => $reviewedAt->toISOString(),
+            ]);
+        });
+
+        return back()->with('status', 'The submitted contract was approved for this recipient.');
+    }
+
+    public function requestResponseChanges(Request $request, Contract $contract, ContractRecipient $recipient): RedirectResponse
+    {
+        $this->authorizeReview($request, $contract, $recipient);
+        $data = $request->validate([
+            'feedback' => ['required', 'string', 'max:5000'],
+        ]);
+        DB::transaction(function () use ($request, $contract, $recipient, $data): void {
+            $lockedRecipient = ContractRecipient::whereKey($recipient->id)
+                ->where('contract_id', $contract->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($lockedRecipient->status === 'Submitted' && $lockedRecipient->returned_storage_path, 409);
+
+            $reviewedAt = now();
+            $lockedRecipient->update([
+                'status' => 'Changes Requested',
+                'review_feedback' => trim($data['feedback']),
+                'reviewed_at' => $reviewedAt,
+            ]);
+            $this->audit($request, 'contract.response_changes_requested', $contract->id, [
+                'recipient_user_id' => $lockedRecipient->user_id,
+                'reviewed_at' => $reviewedAt->toISOString(),
+            ]);
+        });
+
+        return back()->with('status', 'Revision feedback was sent to the recipient.');
+    }
+
     private function recipientCandidateQuery(?int $departmentId = null): Builder
     {
         $query = User::query()
@@ -633,6 +881,25 @@ class ContractController extends Controller
         );
     }
 
+    private function authorizeReview(Request $request, Contract $contract, ContractRecipient $recipient): void
+    {
+        abort_unless($request->user()->hasPermission('contracts.manage'), 403);
+        abort_unless((int) $recipient->contract_id === (int) $contract->id, 404);
+    }
+
+    private function approvedResponseForViewer(Request $request, Contract $contract): ?ContractRecipient
+    {
+        if ($request->user()->hasPermission('contracts.manage')) {
+            return null;
+        }
+
+        return $contract->recipients()
+            ->where('user_id', $request->user()->id)
+            ->where('status', 'Approved')
+            ->whereNotNull('returned_storage_path')
+            ->first();
+    }
+
     private function resolveRecipientIds(array $data): array
     {
         if ($data['recipient_type'] === 'department') {
@@ -640,6 +907,25 @@ class ContractController extends Controller
             if ($recipientIds === []) {
                 throw ValidationException::withMessages([
                     'department_id' => 'There are no active users in the selected department.',
+                ]);
+            }
+
+            return $recipientIds;
+        }
+
+        if ($data['recipient_type'] === 'all') {
+            $recipientIds = User::query()
+                ->where('status', 'Active')
+                ->where(fn (Builder $query) => $query
+                    ->whereNotNull('employee_id')
+                    ->orWhereHas('intern'))
+                ->whereDoesntHave('roles', fn (Builder $query) => $query->whereIn('slug', ['hr-manager', 'super-admin']))
+                ->orderBy('id')
+                ->pluck('id')
+                ->all();
+            if ($recipientIds === []) {
+                throw ValidationException::withMessages([
+                    'recipient_type' => 'There are no active employees or interns to send this contract to.',
                 ]);
             }
 
@@ -682,7 +968,9 @@ class ContractController extends Controller
 
             $openedAt = now();
             $recipient->update([
-                'status' => 'Opened',
+                'status' => in_array($recipient->status, ['Pending', 'Opened'], true)
+                    ? 'Opened'
+                    : $recipient->status,
                 'opened_at' => $openedAt,
                 'received_at' => null,
             ]);

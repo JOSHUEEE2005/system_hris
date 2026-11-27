@@ -47,6 +47,8 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
         Route::get('/contracts', [ContractController::class, 'index'])->name('contracts');
         Route::get('/contracts/{contract}/preview', [ContractController::class, 'preview'])->name('contracts.preview');
         Route::get('/contracts/{contract}/download', [ContractController::class, 'download'])->name('contracts.download');
+        Route::post('/contracts/{contract}/response', [ContractController::class, 'submitResponse'])->name('contracts.response.submit');
+        Route::get('/contracts/{contract}/my-response', [ContractController::class, 'downloadOwnResponse'])->name('contracts.response.own-download');
     });
     Route::get('/leaves', [AdminController::class, 'leavesPage'])->name('leaves');
     Route::get('/onboarding', [AdminController::class, 'onboardingPage'])
@@ -88,6 +90,9 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     Route::middleware('permission:contracts.manage')->group(function () {
         Route::post('/contracts/folders', [ContractController::class, 'storeFolder'])->name('contracts.folders.store');
         Route::post('/contracts', [ContractController::class, 'store'])->name('contracts.store');
+        Route::get('/contracts/{contract}/recipients/{recipient}/response', [ContractController::class, 'downloadResponse'])->name('contracts.response.download');
+        Route::post('/contracts/{contract}/recipients/{recipient}/approve', [ContractController::class, 'approveResponse'])->name('contracts.response.approve');
+        Route::post('/contracts/{contract}/recipients/{recipient}/request-changes', [ContractController::class, 'requestResponseChanges'])->name('contracts.response.changes');
         Route::post('/contracts/{contract}/convert-editor', [ContractController::class, 'convertToEditor'])->name('contracts.convert-editor');
         Route::put('/contracts/{contract}', [ContractController::class, 'update'])->name('contracts.update');
         Route::delete('/contracts/{contract}', [ContractController::class, 'destroy'])->name('contracts.destroy');

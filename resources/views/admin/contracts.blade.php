@@ -81,12 +81,28 @@
                     <div class="contract-grid {{ $canManageContracts ? 'contract-grid-recent' : '' }}" id="contract-grid" @if ($canManageContracts) data-contract-limit="4" data-current-user-id="{{ auth()->id() }}" @endif>
                         @foreach ($contracts as $contract)
                     @php
-                        $isTemplate = $contract->content_html !== null;
-                        $isPreviewable = $isTemplate || in_array($contract->mime_type, $previewableMimeTypes, true);
-                        $isImage = str_starts_with($contract->mime_type, 'image/');
                         $recipient = $canManageContracts ? null : $contract->recipients->first();
+                        $hasApprovedResponse = $recipient?->status === 'Approved' && $recipient->returned_storage_path;
+                        $isTemplate = $contract->content_html !== null && ! $hasApprovedResponse;
+                        $displayFilename = $hasApprovedResponse ? $recipient->returned_filename : $contract->original_filename;
+                        $displayMimeType = $hasApprovedResponse ? $recipient->returned_mime_type : $contract->mime_type;
+                        $displayFileSize = $hasApprovedResponse ? $recipient->returned_file_size : $contract->file_size;
+                        $isPreviewable = $isTemplate || in_array($displayMimeType, $previewableMimeTypes, true);
+                        $isImage = str_starts_with($displayMimeType, 'image/');
                         $departmentName = $contract->department?->department_name;
-                        $fileExtension = strtoupper(pathinfo($contract->original_filename, PATHINFO_EXTENSION) ?: 'FILE');
+                        $fileExtension = strtoupper(pathinfo($displayFilename, PATHINFO_EXTENSION) ?: 'FILE');
+                        $recipientStatusLabel = match ($recipient?->status) {
+                            'Opened' => 'Return needed',
+                            'Submitted' => 'With HR for review',
+                            'Changes Requested' => 'Revision requested',
+                            'Approved' => 'Approved',
+                            default => 'Action needed',
+                        };
+                        $recipientStatusClass = match ($recipient?->status) {
+                            'Changes Requested' => 'revision',
+                            'Approved' => 'opened',
+                            default => 'pending',
+                        };
                     @endphp
                     <article
                         class="contract-card"
@@ -117,12 +133,14 @@
                             <div class="contract-title-row">
                                 <div>
                                     <h3>{{ $contract->title }}</h3>
-                                    <p class="contract-filename" title="{{ $contract->original_filename }}">{{ $contract->original_filename }}</p>
+                                    <p class="contract-filename" title="{{ $displayFilename }}">{{ $displayFilename }}</p>
                                 </div>
                                 @if ($canManageContracts)
                                     <span class="contract-status-badge sent">Sent</span>
                                 @else
-                                    <span class="contract-status-badge {{ $recipient->opened_at ? 'opened' : 'pending' }}">{{ $recipient->opened_at ? 'Opened' : 'Not opened' }}</span>
+                                    <span class="contract-status-badge {{ $contract->response_mode === 'requires_return' ? $recipientStatusClass : ($recipient->opened_at ? 'opened' : 'pending') }}">
+                                        {{ $contract->response_mode === 'requires_return' ? $recipientStatusLabel : ($recipient->opened_at ? 'Opened' : 'Not opened') }}
+                                    </span>
                                 @endif
                             </div>
                             @if ($canManageContracts && $contract->folder)
@@ -130,13 +148,14 @@
                             @endif
                             <div class="contract-card-meta">
                                 <span>{{ $contract->sent_at?->format('M j, Y') ?? $contract->created_at?->format('M j, Y') }}</span>
-                                <span>{{ number_format($contract->file_size / 1024, 0) }} KB</span>
+                                <span>{{ number_format($displayFileSize / 1024, 0) }} KB</span>
                             </div>
                             @if ($canManageContracts)
                                 <p class="contract-audience">
-                                    {{ $contract->recipient_type === 'department' ? 'Department: '.($departmentName ?? 'Department removed') : 'Selected employees' }}
+                                    {{ $contract->recipient_type === 'department' ? 'Department: '.($departmentName ?? 'Department removed') : ($contract->recipient_type === 'all' ? 'All active employees and interns' : 'Selected employees') }}
                                     <span>{{ $contract->recipients_count }} {{ $contract->recipients_count === 1 ? 'recipient' : 'recipients' }}</span>
                                 </p>
+                                <p class="contract-audience-mode">{{ $contract->response_mode === 'requires_return' ? 'Complete and return for HR review' : 'Final copy — no response needed' }}</p>
                                 <div class="contract-receipt-track">
                                     <span>{{ $contract->opened_recipients_count }} opened</span>
                                     <span>{{ $contract->pending_recipients_count }} not opened</span>
@@ -145,9 +164,29 @@
                                     @foreach ($contract->recipients as $contractRecipient)
                                         <div class="contract-recipient-status" data-recipient-status-user="{{ $contractRecipient->user_id }}" hidden>
                                             <strong>{{ $contractRecipient->user?->name ?? 'Former user' }}</strong>
-                                            <span class="{{ $contractRecipient->opened_at ? 'opened' : 'pending' }}">
-                                                {{ $contractRecipient->opened_at ? 'Opened '.$contractRecipient->opened_at->format('M j, Y g:i A') : 'Not opened yet' }}
+                                            <span class="{{ match ($contractRecipient->status) { 'Approved' => 'opened', 'Changes Requested' => 'revision', 'Submitted' => 'pending', default => $contractRecipient->opened_at ? 'opened' : 'pending' } }}">
+                                                {{ $contractRecipient->status === 'Approved' ? 'Approved' : ($contractRecipient->status === 'Submitted' ? 'Submitted for review' : ($contractRecipient->status === 'Changes Requested' ? 'Revision requested' : ($contractRecipient->opened_at ? 'Opened '.$contractRecipient->opened_at->format('M j, Y g:i A') : 'Not opened yet'))) }}
                                             </span>
+                                            @if ($contract->response_mode === 'requires_return' && $contractRecipient->returned_storage_path)
+                                                <a class="contract-review-download" href="{{ route('admin.contracts.response.download', [$contract, $contractRecipient]) }}">View submitted file</a>
+                                            @endif
+                                            @if ($contract->response_mode === 'requires_return' && $contractRecipient->review_feedback)
+                                                <p class="contract-review-feedback"><strong>Feedback:</strong> {{ $contractRecipient->review_feedback }}</p>
+                                            @endif
+                                            @if ($contract->response_mode === 'requires_return' && $contractRecipient->status === 'Submitted')
+                                                <div class="contract-review-actions">
+                                                    <form method="POST" action="{{ route('admin.contracts.response.approve', [$contract, $contractRecipient]) }}">
+                                                        @csrf
+                                                        <button class="contract-action-primary" type="submit">Approve</button>
+                                                    </form>
+                                                    <form method="POST" action="{{ route('admin.contracts.response.changes', [$contract, $contractRecipient]) }}">
+                                                        @csrf
+                                                        <label class="sr-only" for="feedback-{{ $contractRecipient->id }}">Revision feedback for {{ $contractRecipient->user?->name ?? 'recipient' }}</label>
+                                                        <textarea id="feedback-{{ $contractRecipient->id }}" name="feedback" maxlength="5000" placeholder="Explain what needs revision" required></textarea>
+                                                        <button class="contract-action-secondary" type="submit">Request revision</button>
+                                                    </form>
+                                                </div>
+                                            @endif
                                         </div>
                                     @endforeach
                                 </div>
@@ -191,6 +230,7 @@
                                         data-title="{{ $contract->title }}"
                                         data-filename="{{ $contract->original_filename }}"
                                         data-recipient-type="{{ $contract->recipient_type }}"
+                                        data-response-mode="{{ $contract->response_mode }}"
                                         data-source-type="{{ $isTemplate ? 'editor' : 'upload' }}"
                                         data-content-html="{{ $contract->content_html }}"
                                         data-department-id="{{ $contract->department_id ?? '' }}"
@@ -202,6 +242,35 @@
                                     <span class="contract-opened-date">Opened {{ $recipient->opened_at->format('M j, Y g:i A') }}</span>
                                 @endif
                             </div>
+                            @if (! $canManageContracts && $contract->response_mode === 'requires_return')
+                                <section class="contract-response-panel" aria-label="Contract response">
+                                    @if ($recipient->status === 'Approved')
+                                        <p class="contract-response-message approved">Your submitted version is approved and is now your final copy.</p>
+                                    @elseif ($recipient->status === 'Submitted')
+                                        <p class="contract-response-message pending">Your file was sent to HR. You can upload a replacement while it is under review.</p>
+                                        <a class="contract-action-secondary contract-own-response-link" href="{{ route('admin.contracts.response.own-download', $contract) }}">Download your submitted file</a>
+                                    @elseif ($recipient->status === 'Changes Requested')
+                                        <p class="contract-response-message revision">HR requested a revision. Update your file and send it back for another review.</p>
+                                        @if ($recipient->review_feedback)
+                                            <div class="contract-feedback-note"><strong>HR feedback</strong><p>{{ $recipient->review_feedback }}</p></div>
+                                        @endif
+                                        @if ($recipient->returned_storage_path)
+                                            <a class="contract-action-secondary contract-own-response-link" href="{{ route('admin.contracts.response.own-download', $contract) }}">Download your previous submission</a>
+                                        @endif
+                                    @else
+                                        <p class="contract-response-message pending">This copy needs your completed file before HR can finalize it.</p>
+                                    @endif
+                                    @if ($recipient->status !== 'Approved')
+                                        <form class="contract-response-form" method="POST" action="{{ route('admin.contracts.response.submit', $contract) }}" enctype="multipart/form-data">
+                                            @csrf
+                                            <label for="response-file-{{ $contract->id }}">{{ in_array($recipient->status, ['Submitted', 'Changes Requested'], true) ? 'Replace completed file' : 'Upload completed file' }}</label>
+                                            <input id="response-file-{{ $contract->id }}" type="file" name="file" accept=".pdf,.doc,.docx,.odt" required>
+                                            <small>PDF or Word is recommended. Maximum file size: 35 MB.</small>
+                                            <button class="contract-action-primary" type="submit">{{ in_array($recipient->status, ['Submitted', 'Changes Requested'], true) ? 'Send updated file to HR' : 'Send to HR for review' }}</button>
+                                        </form>
+                                    @endif
+                                </section>
+                            @endif
                         </div>
                     </article>
                         @endforeach
@@ -349,6 +418,10 @@
                         <div class="contract-recipient-modes">
                             <label><input type="radio" name="recipient_type" value="department" @checked(old('recipient_type', 'department') === 'department')><span><strong>Department</strong><small>Send to active users in one department</small></span></label>
                             <label><input type="radio" name="recipient_type" value="individual" @checked(old('recipient_type') === 'individual')><span><strong>Selected employees</strong><small>Choose one or more recipients</small></span></label>
+                            <label><input type="radio" name="recipient_type" value="all" @checked(old('recipient_type') === 'all')><span><strong>All active employees and interns</strong><small>Exclude HR and administrator accounts</small></span></label>
+                        </div>
+                        <div id="contract-all-choice" class="contract-target-panel" hidden>
+                            <p class="contract-audience-note">This contract will be shared with every active employee and intern account.</p>
                         </div>
                         <div id="contract-department-choice" class="contract-target-panel">
                             <label for="contract-department">Department</label>
@@ -386,6 +459,17 @@
                                 </div>
                             @endif
                         </div>
+                    </fieldset>
+                    <fieldset class="contract-response-mode">
+                        <legend>What should recipients do? <span>*</span></legend>
+                        <label>
+                            <input type="radio" name="response_mode" value="as_is" @checked(old('response_mode', 'as_is') === 'as_is') required>
+                            <span><strong>Final copy — no response needed</strong><small>Recipients can read or download it. Opening marks it as complete.</small></span>
+                        </label>
+                        <label>
+                            <input type="radio" name="response_mode" value="requires_return" @checked(old('response_mode') === 'requires_return') required>
+                            <span><strong>Complete and return for HR review</strong><small>Recipients upload their completed file. HR can approve it or request revisions.</small></span>
+                        </label>
                     </fieldset>
                     <p class="contract-private-note">The file is kept in private storage and will only be available to HR and the selected recipients.</p>
                     <div class="contract-modal-actions">

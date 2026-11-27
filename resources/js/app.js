@@ -89,11 +89,13 @@ const contractEditButtons = [...document.querySelectorAll('[data-contract-edit]'
 const contractModeInputs = [...document.querySelectorAll('input[name="recipient_type"]')];
 const contractDepartmentChoice = document.getElementById('contract-department-choice');
 const contractIndividualChoice = document.getElementById('contract-individual-choice');
+const contractAllChoice = document.getElementById('contract-all-choice');
 const contractDepartmentSelect = contractDepartmentChoice?.querySelector('select');
 const contractFolderSelect = document.getElementById('contract-folder');
 const contractRecipientCheckboxes = [...document.querySelectorAll('input[name="recipient_ids[]"]')];
 const contractRecipientSearch = document.getElementById('contract-recipient-search');
 const contractRecipientOptions = [...document.querySelectorAll('[data-contract-recipient-option]')];
+const contractResponseModeInputs = [...document.querySelectorAll('input[name="response_mode"]')];
 const noContractRecipientsMatch = document.getElementById('contract-recipient-search-empty');
 let contractEditorRange = null;
 
@@ -176,6 +178,7 @@ const updateContractRecipientMode = () => {
     const mode = contractModeInputs.find((input) => input.checked)?.value || 'department';
     contractDepartmentChoice.hidden = mode !== 'department';
     contractIndividualChoice.hidden = mode !== 'individual';
+    if (contractAllChoice instanceof HTMLElement) contractAllChoice.hidden = mode !== 'all';
 
     if (contractDepartmentSelect instanceof HTMLSelectElement) {
         contractDepartmentSelect.disabled = mode !== 'department';
@@ -248,6 +251,7 @@ const setContractCreateMode = () => {
         contractFolderSelect.value = '';
     }
     contractModeInputs.forEach((input) => { input.checked = input.value === 'department'; });
+    contractResponseModeInputs.forEach((input) => { input.checked = input.value === 'as_is'; });
     contractRecipientCheckboxes.forEach((input) => { input.checked = false; });
     if (contractRecipientSearch instanceof HTMLInputElement) contractRecipientSearch.value = '';
     if (contractModalTitle) contractModalTitle.textContent = 'Send a new contract';
@@ -281,6 +285,7 @@ const setContractEditMode = (button, preserveValues = false) => {
             contractFolderSelect.value = button.dataset.folderId || '';
         }
         contractModeInputs.forEach((input) => { input.checked = input.value === button.dataset.recipientType; });
+        contractResponseModeInputs.forEach((input) => { input.checked = input.value === button.dataset.responseMode; });
         const selectedIds = new Set(button.dataset.recipientIds.split(',').filter(Boolean));
         contractRecipientCheckboxes.forEach((input) => { input.checked = selectedIds.has(input.value); });
         const source = button.dataset.sourceType || 'upload';

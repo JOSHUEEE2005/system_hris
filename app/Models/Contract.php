@@ -21,6 +21,7 @@ class Contract extends Model
         'created_by',
         'sent_at',
         'content_html',
+        'response_mode',
     ];
 
     protected $casts = [
