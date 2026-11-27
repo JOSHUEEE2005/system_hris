@@ -59,6 +59,7 @@ if (themeToggle instanceof HTMLButtonElement) {
 }
 
 const contractModal = document.getElementById('contract-modal');
+const contractModalPanel = contractModal?.querySelector('.contract-modal-panel');
 const contractOpenButton = document.getElementById('open-contract-modal');
 const contractForm = document.querySelector('#contract-modal form.contract-form');
 const contractDeleteForm = document.getElementById('contract-delete-form');
@@ -150,6 +151,23 @@ const syncContractEditor = () => {
     }
 };
 
+const fitConvertedPdfPages = () => {
+    if (!(contractEditor instanceof HTMLElement)) return;
+
+    const editorStyle = window.getComputedStyle(contractEditor);
+    const horizontalPadding = Number.parseFloat(editorStyle.paddingLeft) + Number.parseFloat(editorStyle.paddingRight);
+    const availableWidth = contractEditor.clientWidth - horizontalPadding;
+    if (availableWidth <= 0) return;
+
+    contractEditor.querySelectorAll('.converted-pdf-page').forEach((page) => {
+        if (!(page instanceof HTMLElement)) return;
+        const pageWidth = Number.parseFloat(page.style.width);
+        if (!Number.isFinite(pageWidth) || pageWidth <= 0 || !page.style.width.trim().endsWith('pt')) return;
+
+        page.style.zoom = String(Math.min(1, availableWidth / (pageWidth * 96 / 72)));
+    });
+};
+
 const updateContractRecipientMode = () => {
     if (!(contractDepartmentChoice instanceof HTMLElement) || !(contractIndividualChoice instanceof HTMLElement)) {
         return;
@@ -185,8 +203,12 @@ const filterContractRecipients = () => {
 
 const showContractModal = () => {
     if (!(contractModal instanceof HTMLElement)) return;
+    const hasConvertedPdfPages = contractEditor instanceof HTMLElement
+        && contractEditor.querySelector('.converted-pdf-page') !== null;
+    contractModalPanel?.classList.toggle('contract-modal-panel-wide', hasConvertedPdfPages);
     contractModal.hidden = false;
     document.body.style.overflow = 'hidden';
+    window.requestAnimationFrame(fitConvertedPdfPages);
     contractTitleInput?.focus();
 };
 
@@ -289,6 +311,13 @@ const setContractEditMode = (button, preserveValues = false) => {
 if (contractDepartmentChoice instanceof HTMLElement && contractIndividualChoice instanceof HTMLElement) {
     updateContractDocumentMode();
     updateContractRecipientMode();
+}
+if (contractEditor instanceof HTMLElement) {
+    if ('ResizeObserver' in window) {
+        new ResizeObserver(fitConvertedPdfPages).observe(contractEditor);
+    } else {
+        window.addEventListener('resize', fitConvertedPdfPages);
+    }
 }
 contractDocumentModeInputs.forEach((input) => input.addEventListener('change', updateContractDocumentMode));
 

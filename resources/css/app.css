@@ -665,6 +665,7 @@ html[data-theme="dark"] .trend-point { fill: #152838; stroke: #91c6d4; }
     background: #fff;
     box-shadow: 0 24px 70px #082b4666;
 }
+.contract-modal-panel.contract-modal-panel-wide { width: min(1040px, 100%); }
 .contract-modal-header {
     position: sticky;
     top: 0;
