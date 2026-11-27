@@ -130,12 +130,19 @@ class ContractsWorkflowTest extends TestCase
             ->assertDownload('first-draft.pdf');
         $this->actingAs($otherRecipient)->get(route('admin.contracts.response.download', [$contract, $recipientRecord]))
             ->assertForbidden();
+        $previewResponse = $this->actingAs($hr)->get(route('admin.contracts.response.preview', [$contract, $recipientRecord]))
+            ->assertOk()
+            ->assertHeader('content-type', 'application/pdf');
+        $this->assertStringContainsString('inline', $previewResponse->headers->get('content-disposition'));
+        $this->assertStringContainsString('first-draft.pdf', $previewResponse->headers->get('content-disposition'));
+        $this->actingAs($otherRecipient)->get(route('admin.contracts.response.preview', [$contract, $recipientRecord]))
+            ->assertForbidden();
         $this->actingAs($recipient)->get(route('admin.contracts.preview', [$contract, 'track_open' => 1]))
             ->assertOk();
         $this->assertSame('Submitted', $recipientRecord->fresh()->status);
         $this->actingAs($hr)->get(route('admin.contracts'))
             ->assertOk()
-            ->assertSee('View submitted file')
+            ->assertSee('Preview submitted file')
             ->assertSee('Approve')
             ->assertSee('Request revision');
 
@@ -406,6 +413,8 @@ class ContractsWorkflowTest extends TestCase
             ->assertSee('1 not opened')
             ->assertSee('data-recipient-user-ids="'.$recipient->id.'"', false)
             ->assertSee('Edit')
+            ->assertSee('Open contract')
+            ->assertSee('contract-details-modal', false)
             ->assertSee('value="'.$recipient->id.'"', false)
             ->assertSee('Notifications')
             ->assertSee('Profile')

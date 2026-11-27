@@ -223,6 +223,7 @@ class ContractController extends Controller
             );
         } catch (Throwable $exception) {
             report($exception);
+
             return back()->withErrors(['contract' => $exception->getMessage()]);
         }
 
@@ -774,6 +775,24 @@ class ContractController extends Controller
             $recipient->returned_filename,
             ['X-Content-Type-Options' => 'nosniff'],
         );
+    }
+
+    public function previewResponse(Request $request, Contract $contract, ContractRecipient $recipient): BinaryFileResponse
+    {
+        $this->authorizeReview($request, $contract, $recipient);
+        abort_unless($recipient->returned_storage_path, 404);
+        abort_unless(in_array($recipient->returned_mime_type, self::PREVIEWABLE_MIME_TYPES, true), 415);
+
+        $path = Storage::disk('local')->path($recipient->returned_storage_path);
+        abort_unless(is_file($path), 404);
+
+        $response = response()->file($path, [
+            'Content-Type' => $recipient->returned_mime_type,
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+        $response->setContentDisposition('inline', $recipient->returned_filename);
+
+        return $response;
     }
 
     public function downloadOwnResponse(Request $request, Contract $contract): StreamedResponse

@@ -60,6 +60,11 @@ if (themeToggle instanceof HTMLButtonElement) {
 
 const contractModal = document.getElementById('contract-modal');
 const contractModalPanel = contractModal?.querySelector('.contract-modal-panel');
+const contractDetailsModal = document.getElementById('contract-details-modal');
+const contractDetailsTitle = document.getElementById('contract-details-title');
+const contractDetailsDescription = document.getElementById('contract-details-description');
+const contractDetailsRecipientSlot = document.getElementById('contract-details-recipient-slot');
+const contractDetailsActionsSlot = document.getElementById('contract-details-actions-slot');
 const contractOpenButton = document.getElementById('open-contract-modal');
 const contractForm = document.querySelector('#contract-modal form.contract-form');
 const contractDeleteForm = document.getElementById('contract-delete-form');
@@ -98,6 +103,8 @@ const contractRecipientOptions = [...document.querySelectorAll('[data-contract-r
 const contractResponseModeInputs = [...document.querySelectorAll('input[name="response_mode"]')];
 const noContractRecipientsMatch = document.getElementById('contract-recipient-search-empty');
 let contractEditorRange = null;
+let contractDetailsTrigger = null;
+let contractDetailsMovedNodes = [];
 
 const rememberContractEditorRange = () => {
     const selection = window.getSelection();
@@ -222,6 +229,64 @@ const closeContractModal = () => {
     contractOpenButton?.focus();
 };
 
+const restoreContractDetailsNodes = () => {
+    [...contractDetailsMovedNodes].reverse().forEach(({ element, placeholder }) => {
+        if (placeholder.parentNode) placeholder.replaceWith(element);
+    });
+    contractDetailsMovedNodes = [];
+};
+
+const closeContractDetails = (restoreFocus = true) => {
+    if (!(contractDetailsModal instanceof HTMLElement) || contractDetailsModal.hidden) return;
+    restoreContractDetailsNodes();
+    contractDetailsModal.hidden = true;
+    if (!(contractModal instanceof HTMLElement) || contractModal.hidden) {
+        document.body.style.overflow = '';
+    }
+    if (restoreFocus) contractDetailsTrigger?.focus();
+    contractDetailsTrigger = null;
+};
+
+const openContractDetails = (trigger) => {
+    if (
+        !(contractDetailsModal instanceof HTMLElement)
+        || !(contractDetailsRecipientSlot instanceof HTMLElement)
+        || !(contractDetailsActionsSlot instanceof HTMLElement)
+    ) return;
+
+    closeContractDetails(false);
+    const card = trigger.closest('[data-contract-card]');
+    if (!(card instanceof HTMLElement)) return;
+
+    const title = card.querySelector('.contract-title-row h3')?.textContent?.trim() || 'Contract';
+    const recipientDetails = card.querySelector('[data-contract-recipient-status-list]');
+    const contractActions = card.querySelector('[data-contract-card-actions]');
+    const moveIntoModal = (element, slot) => {
+        if (!(element instanceof HTMLElement) || !element.parentNode) return;
+        const placeholder = document.createComment('');
+        element.parentNode.insertBefore(placeholder, element);
+        slot.append(element);
+        contractDetailsMovedNodes.push({ element, placeholder });
+    };
+
+    if (contractDetailsTitle instanceof HTMLElement) contractDetailsTitle.textContent = title;
+    if (contractDetailsDescription instanceof HTMLElement) {
+        const selectedFolder = personalContractFolderFilters
+            .find((button) => button.dataset.personalFolderFilter === selectedPersonalContractUser);
+        const selectedFolderName = selectedFolder?.querySelector('.contract-personal-folder-name')?.textContent?.trim();
+        contractDetailsDescription.textContent = selectedPersonalContractUser && selectedFolderName
+            ? `Reviewing ${selectedFolderName}'s copy and submission.`
+            : 'Review each recipient’s status and manage this contract.';
+    }
+
+    moveIntoModal(recipientDetails, contractDetailsRecipientSlot);
+    moveIntoModal(contractActions, contractDetailsActionsSlot);
+    contractDetailsTrigger = trigger;
+    contractDetailsModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    contractDetailsModal.querySelector('[data-close-contract-details]')?.focus();
+};
+
 const setContractCreateMode = () => {
     if (!(contractForm instanceof HTMLFormElement)) return;
 
@@ -327,14 +392,26 @@ if (contractEditor instanceof HTMLElement) {
 contractDocumentModeInputs.forEach((input) => input.addEventListener('change', updateContractDocumentMode));
 
 contractOpenButton?.addEventListener('click', setContractCreateMode);
+document.querySelectorAll('[data-contract-details-open]').forEach((button) => {
+    button.addEventListener('click', () => openContractDetails(button));
+});
 contractEditButtons.forEach((button) => {
-    button.addEventListener('click', () => setContractEditMode(button));
+    button.addEventListener('click', () => {
+        closeContractDetails(false);
+        setContractEditMode(button);
+    });
+});
+contractDetailsModal?.querySelectorAll('[data-close-contract-details]').forEach((button) => {
+    button.addEventListener('click', () => closeContractDetails());
 });
 contractModal?.querySelectorAll('[data-close-contract-modal]').forEach((button) => {
     button.addEventListener('click', closeContractModal);
 });
 document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && contractModal instanceof HTMLElement && !contractModal.hidden) {
+    if (event.key !== 'Escape') return;
+    if (contractDetailsModal instanceof HTMLElement && !contractDetailsModal.hidden) {
+        closeContractDetails();
+    } else if (contractModal instanceof HTMLElement && !contractModal.hidden) {
         closeContractModal();
     }
 });
@@ -510,8 +587,8 @@ const filterContractCards = () => {
             && Number(card.dataset.contractIndex) >= recentLimit;
         card.hidden = !matchesSearch || !matchesFolder || !matchesPersonalFolder || isBeyondRecentLimit;
         card.querySelectorAll('[data-recipient-status-user]').forEach((detail) => {
-            detail.hidden = !selectedPersonalContractUser
-                || detail.dataset.recipientStatusUser !== selectedPersonalContractUser;
+            detail.hidden = Boolean(selectedPersonalContractUser)
+                && detail.dataset.recipientStatusUser !== selectedPersonalContractUser;
         });
         if (!card.hidden) visibleCount++;
     });

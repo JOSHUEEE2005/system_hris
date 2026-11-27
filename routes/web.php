@@ -1,11 +1,11 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuditHistoryController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ContractController;
 use App\Http\Controllers\RegistrationController;
+use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
@@ -90,6 +90,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->name('admin.')->group(fu
     Route::middleware('permission:contracts.manage')->group(function () {
         Route::post('/contracts/folders', [ContractController::class, 'storeFolder'])->name('contracts.folders.store');
         Route::post('/contracts', [ContractController::class, 'store'])->name('contracts.store');
+        Route::get('/contracts/{contract}/recipients/{recipient}/response/preview', [ContractController::class, 'previewResponse'])->name('contracts.response.preview');
         Route::get('/contracts/{contract}/recipients/{recipient}/response', [ContractController::class, 'downloadResponse'])->name('contracts.response.download');
         Route::post('/contracts/{contract}/recipients/{recipient}/approve', [ContractController::class, 'approveResponse'])->name('contracts.response.approve');
         Route::post('/contracts/{contract}/recipients/{recipient}/request-changes', [ContractController::class, 'requestResponseChanges'])->name('contracts.response.changes');

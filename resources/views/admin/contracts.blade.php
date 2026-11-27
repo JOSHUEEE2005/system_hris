@@ -125,7 +125,7 @@
                                     <small>{{ $isPreviewable ? 'Open preview to view this file' : 'Download to view this file type' }}</small>
                                 </div>
                             @endif
-                            @if ($isPreviewable)
+                            @if ($isPreviewable && ! $canManageContracts)
                                 <a class="contract-preview-link" href="{{ route('admin.contracts.preview', [$contract, 'track_open' => 1]) }}" target="_blank" rel="noopener">Open preview</a>
                             @endif
                         </div>
@@ -160,7 +160,8 @@
                                     <span>{{ $contract->opened_recipients_count }} opened</span>
                                     <span>{{ $contract->pending_recipients_count }} not opened</span>
                                 </div>
-                                <div class="contract-recipient-status-list">
+                                <button class="contract-manage-open" type="button" data-contract-details-open>Open contract</button>
+                                <div class="contract-recipient-status-list" data-contract-recipient-status-list>
                                     @foreach ($contract->recipients as $contractRecipient)
                                         <div class="contract-recipient-status" data-recipient-status-user="{{ $contractRecipient->user_id }}" hidden>
                                             <strong>{{ $contractRecipient->user?->name ?? 'Former user' }}</strong>
@@ -168,7 +169,11 @@
                                                 {{ $contractRecipient->status === 'Approved' ? 'Approved' : ($contractRecipient->status === 'Submitted' ? 'Submitted for review' : ($contractRecipient->status === 'Changes Requested' ? 'Revision requested' : ($contractRecipient->opened_at ? 'Opened '.$contractRecipient->opened_at->format('M j, Y g:i A') : 'Not opened yet'))) }}
                                             </span>
                                             @if ($contract->response_mode === 'requires_return' && $contractRecipient->returned_storage_path)
-                                                <a class="contract-review-download" href="{{ route('admin.contracts.response.download', [$contract, $contractRecipient]) }}">View submitted file</a>
+                                                @if (in_array($contractRecipient->returned_mime_type, $previewableMimeTypes, true))
+                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.preview', [$contract, $contractRecipient]) }}" target="_blank" rel="noopener">Preview submitted file</a>
+                                                @else
+                                                    <a class="contract-review-download" href="{{ route('admin.contracts.response.download', [$contract, $contractRecipient]) }}">Download submitted file</a>
+                                                @endif
                                             @endif
                                             @if ($contract->response_mode === 'requires_return' && $contractRecipient->review_feedback)
                                                 <p class="contract-review-feedback"><strong>Feedback:</strong> {{ $contractRecipient->review_feedback }}</p>
@@ -193,7 +198,7 @@
                             @else
                                 <p class="contract-sender">Sent by {{ $contract->createdBy?->name ?? 'HR' }}</p>
                             @endif
-                            <div class="contract-card-actions">
+                            <div class="contract-card-actions" data-contract-card-actions>
                                 @if ($isPreviewable)
                                     <a class="contract-action-secondary" href="{{ route('admin.contracts.preview', [$contract, 'track_open' => 1]) }}" target="_blank" rel="noopener">Preview</a>
                                 @endif
@@ -330,6 +335,30 @@
     </main>
 
     @if ($canManageContracts)
+        <div id="contract-details-modal" class="contract-modal" hidden>
+            <button class="contract-modal-backdrop" type="button" data-close-contract-details aria-label="Close dialog"></button>
+            <section class="contract-modal-panel contract-details-panel" role="dialog" aria-modal="true" aria-labelledby="contract-details-title" aria-describedby="contract-details-description">
+                <header class="contract-modal-header">
+                    <div>
+                        <span class="contract-modal-eyebrow">CONTRACT DETAILS</span>
+                        <h2 id="contract-details-title">Contract</h2>
+                        <p id="contract-details-description">Review recipients and contract options.</p>
+                    </div>
+                    <button class="contract-modal-close" type="button" data-close-contract-details aria-label="Close">×</button>
+                </header>
+                <div class="contract-details-body">
+                    <section class="contract-details-section" aria-labelledby="contract-recipient-review-heading">
+                        <h3 id="contract-recipient-review-heading">Recipient activity and submissions</h3>
+                        <div id="contract-details-recipient-slot"></div>
+                    </section>
+                    <section class="contract-details-section" aria-labelledby="contract-options-heading">
+                        <h3 id="contract-options-heading">Contract options</h3>
+                        <div id="contract-details-actions-slot"></div>
+                    </section>
+                </div>
+            </section>
+        </div>
+
         <div id="contract-modal" class="contract-modal" @if (! $errors->any()) hidden @endif>
             <button class="contract-modal-backdrop" type="button" data-close-contract-modal aria-label="Close dialog"></button>
             <section class="contract-modal-panel" role="dialog" aria-modal="true" aria-labelledby="contract-modal-title" aria-describedby="contract-modal-description">
